@@ -1,0 +1,263 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * =========================
+ * Enums
+ * =========================
+ */
+enum Role {
+  CLIENT
+  PROVIDER
+  ADMIN
+}
+
+enum OAuth {
+  GOOGLE
+  FACEBOOK
+  APPLE
+}
+
+enum SectorType {
+  PUBLIC
+  PRIVATE
+  NGO
+  EDUCATION
+  HEALTH
+  OTHER
+}
+
+/**
+ * Control de publicación de servicios
+ */
+enum ServiceStatus {
+  DRAFT
+  PUBLISHED
+  PAUSED
+  ARCHIVED
+}
+
+/**
+ * =========================
+ * Usuarios y Proveedores
+ * =========================
+ */
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String?
+  role      Role     @default(CLIENT)
+
+  // 👇 Nuevo: avatar guardado como key de S3 (y opcional miniatura)
+  avatarUrl       String?
+  avatarThumbUrl  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  passwordResets PasswordReset[]
+  providers      Provider[]
+  reviews        Review[]
+  services       Service[]       @relation("ProviderServices")
+  favorites      Favorite[]      @relation("UserFavorites")
+
+  @@index([role])
+}
+
+model Provider {
+  id        String   @id @default(cuid())
+  userId    String
+  type      OAuth
+  oauthId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([type, oauthId])
+  @@index([userId])
+}
+
+/**
+ * =========================
+ * Catálogo / Jerarquía
+ * =========================
+ */
+/// Jerarquía de categorías (Áreas/Sub-áreas)
+model Category {
+  id            String     @id @default(cuid())
+  name          String
+  // Imágenes de portada (opcional)
+  imageUrl      String?
+  imageThumbUrl String?
+  // Meta
+  isActive      Boolean    @default(true)
+  sector        SectorType @default(OTHER)
+  parentId      String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  // Relaciones
+  parent       Category?     @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Category[]    @relation("CategoryHierarchy")
+  services     Service[]
+  serviceTypes ServiceType[] @relation("CategoryOnServiceType")
+
+  // Restricciones / Índices
+  @@unique([name, parentId])
+  @@index([parentId])
+  @@index([isActive])
+  @@index([sector])
+}
+
+model ServiceType {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  categoryId  String?
+
+  services Service[]
+  category Category? @relation("CategoryOnServiceType", fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+/**
+ * =========================
+ * Servicios e Imágenes
+ * =========================
+ */
+/// Fotos adicionales para un Service
+model ServiceImage {
+  id        String   @id @default(cuid())
+  serviceId String
+  url       String
+  thumbUrl  String? // miniatura
+  createdAt DateTime @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId])
+}
+
+model Service {
+  id            String        @id @default(cuid())
+  title         String
+  description   String
+  priceFrom     Int?
+  city          String?
+  providerId    String?
+  categoryId    String?
+  ratingAvg     Float         @default(0)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  adminCreated  Boolean       @default(false)
+  // Portada y miniatura
+  coverUrl      String?
+  coverThumbUrl String?
+  serviceTypeId String?
+  // Control de ciclo de vida
+  status        ServiceStatus @default(PUBLISHED)
+  deletedAt     DateTime?
+
+  reviews     Review[]
+  category    Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  provider    User?          @relation("ProviderServices", fields: [providerId], references: [id], onDelete: SetNull)
+  serviceType ServiceType?   @relation(fields: [serviceTypeId], references: [id], onDelete: SetNull)
+  images      ServiceImage[]
+  favorites   Favorite[]     @relation("ServiceFavorites")
+
+  @@unique([title, providerId], name: "service_title_provider_unique")
+  @@index([categoryId])
+  @@index([providerId])
+  @@index([serviceTypeId])
+  @@index([adminCreated])
+  @@index([ratingAvg])
+  @@index([createdAt])
+  // Índices compuestos para búsquedas frecuentes
+  @@index([city, categoryId])
+  @@index([serviceTypeId, city])
+  // Para filtrar servicios visibles rápidamente
+  @@index([status, deletedAt])
+}
+
+/**
+ * =========================
+ * Reseñas
+ * =========================
+ */
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int
+  comment   String?
+  userId    String
+  serviceId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Un usuario solo puede reseñar una vez cada servicio
+  @@unique([userId, serviceId])
+  @@index([serviceId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+/**
+ * =========================
+ * Reset de contraseña
+ * =========================
+ */
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Índices para tareas de limpieza y validación
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+  @@index([userId, usedAt])
+  // 🔧 Mantener snake_case en la base para evitar el conflicto con "PasswordReset"
+  @@map("password_resets")
+}
+
+/**
+ * =========================
+ * Favoritos
+ * =========================
+ */
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  serviceId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation("UserFavorites", fields: [userId], references: [id], onDelete: Cascade)
+  service Service @relation("ServiceFavorites", fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serviceId])
+  @@index([userId])
+  @@index([serviceId])
+}

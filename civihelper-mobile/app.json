@@ -1,0 +1,87 @@
+{
+  "expo": {
+    "name": "civihelper-mobile",
+    "slug": "civihelper-mobile",
+    "scheme": "civihelper",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "src/assets/Logo3.png",
+    "splash": {
+      "image": "src/assets/Logo1.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tuorg.civihelper",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Necesitamos acceder a tu galería para subir fotos de servicios.",
+        "NSPhotoLibraryAddUsageDescription": "Necesitamos guardar imágenes editadas en tu galería.",
+        "NSCameraUsageDescription": "Necesitamos acceder a tu cámara para tomar fotos de tus servicios."
+      }
+    },
+    "android": {
+      "package": "com.tuorg.civihelper",
+      "adaptiveIcon": {
+        "foregroundImage": "src/assets/Logo1.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "civihelper"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
+      "permissions": [
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
+    },
+    "web": {
+      "favicon": "src/assets/Logo3.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Necesitamos acceder a tu galería para subir fotos.",
+          "cameraPermission": "Necesitamos acceder a tu cámara para tomar fotos.",
+          "microphonePermission": "Necesitamos usar el micrófono si grabas video.",
+          "savePhotosPermission": "Permítenos guardar imágenes editadas en tu galería."
+        }
+      ],
+      "expo-font",
+      "expo-asset"
+    ],
+    "assetBundlePatterns": [
+      "src/assets/**/*"
+    ],
+    "updates": {
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "extra": {
+      "googleWebClientId": "TU_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com",
+      "googleIosClientId": "TU_GOOGLE_IOS_CLIENT_ID.apps.googleusercontent.com",
+      "googleAndroidClientId": "TU_GOOGLE_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+      "facebookAppId": "TU_FACEBOOK_APP_ID",
+      "eas": {
+        "projectId": "TU_EAS_PROJECT_ID"
+      }
+    }
+  }
+}
