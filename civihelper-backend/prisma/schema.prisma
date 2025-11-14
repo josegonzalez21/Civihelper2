@@ -1,4 +1,6 @@
-// prisma/schema.prisma
+// prisma/schema.full.prisma
+// Consolidated Prisma schema created 2025-11-10
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -34,14 +36,45 @@ enum SectorType {
   OTHER
 }
 
-/**
- * Control de publicación de servicios
- */
 enum ServiceStatus {
   DRAFT
   PUBLISHED
   PAUSED
   ARCHIVED
+}
+
+enum ReportTargetType {
+  USER
+  SERVICE
+  BOOKING
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  RESOLVED
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  SYSTEM
 }
 
 /**
@@ -50,25 +83,44 @@ enum ServiceStatus {
  * =========================
  */
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
-  password  String?
-  role      Role     @default(CLIENT)
+  id    String @id @default(cuid())
+  name  String
+  email String @unique
 
-  // 👇 Nuevo: avatar guardado como key de S3 (y opcional miniatura)
-  avatarUrl       String?
-  avatarThumbUrl  String?
+  password     String?
+  passwordHash String?
+
+  role Role @default(CLIENT)
+
+  avatarKey      String?
+  avatarUrl      String?
+  avatarThumbUrl String?
+
+  tokenVersion Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relaciones
+  // Relaciones existentes
   passwordResets PasswordReset[]
   providers      Provider[]
   reviews        Review[]
   services       Service[]       @relation("ProviderServices")
   favorites      Favorite[]      @relation("UserFavorites")
+
+  reportsMade      Report[]  @relation("reportsMade")
+  reportsHandled   Report[]  @relation("reportsHandled")
+  clientBookings   Booking[] @relation("clientBookings")
+  providerBookings Booking[] @relation("providerBookings")
+  paymentsMade     Payment[] @relation("paymentsMade")
+  paymentsReceived Payment[] @relation("paymentsReceived")
+
+  // ✅ Relaciones de Chat
+  clientConversations   Conversation[] @relation("ClientConversations")
+  providerConversations Conversation[] @relation("ProviderConversations")
+  sentMessages          Message[]      @relation("SentMessages")
+
+  blocked Boolean @default(false)
 
   @@index([role])
 }
@@ -92,27 +144,23 @@ model Provider {
  * Catálogo / Jerarquía
  * =========================
  */
-/// Jerarquía de categorías (Áreas/Sub-áreas)
 model Category {
   id            String     @id @default(cuid())
   name          String
-  // Imágenes de portada (opcional)
   imageUrl      String?
   imageThumbUrl String?
-  // Meta
   isActive      Boolean    @default(true)
   sector        SectorType @default(OTHER)
   parentId      String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  // Relaciones
   parent       Category?     @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children     Category[]    @relation("CategoryHierarchy")
   services     Service[]
   serviceTypes ServiceType[] @relation("CategoryOnServiceType")
+  promotions   Promotion[]   @relation("CategoryPromotions")
 
-  // Restricciones / Índices
   @@unique([name, parentId])
   @@index([parentId])
   @@index([isActive])
@@ -141,12 +189,11 @@ model ServiceType {
  * Servicios e Imágenes
  * =========================
  */
-/// Fotos adicionales para un Service
 model ServiceImage {
   id        String   @id @default(cuid())
   serviceId String
   url       String
-  thumbUrl  String? // miniatura
+  thumbUrl  String?
   createdAt DateTime @default(now())
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
@@ -155,24 +202,25 @@ model ServiceImage {
 }
 
 model Service {
-  id            String        @id @default(cuid())
-  title         String
-  description   String
-  priceFrom     Int?
-  city          String?
-  providerId    String?
-  categoryId    String?
-  ratingAvg     Float         @default(0)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  adminCreated  Boolean       @default(false)
-  // Portada y miniatura
+  id           String   @id @default(cuid())
+  title        String
+  description  String
+  priceFrom    Int?
+  city         String?
+  providerId   String?
+  categoryId   String?
+  ratingAvg    Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  adminCreated Boolean  @default(false)
+
   coverUrl      String?
   coverThumbUrl String?
+
   serviceTypeId String?
-  // Control de ciclo de vida
-  status        ServiceStatus @default(PUBLISHED)
-  deletedAt     DateTime?
+
+  status    ServiceStatus @default(PUBLISHED)
+  deletedAt DateTime?
 
   reviews     Review[]
   category    Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
@@ -180,6 +228,11 @@ model Service {
   serviceType ServiceType?   @relation(fields: [serviceTypeId], references: [id], onDelete: SetNull)
   images      ServiceImage[]
   favorites   Favorite[]     @relation("ServiceFavorites")
+  promotions  Promotion[]
+  bookings    Booking[]
+
+  // ✅ Relación de Chat
+  conversations Conversation[]
 
   @@unique([title, providerId], name: "service_title_provider_unique")
   @@index([categoryId])
@@ -188,11 +241,37 @@ model Service {
   @@index([adminCreated])
   @@index([ratingAvg])
   @@index([createdAt])
-  // Índices compuestos para búsquedas frecuentes
   @@index([city, categoryId])
   @@index([serviceTypeId, city])
-  // Para filtrar servicios visibles rápidamente
   @@index([status, deletedAt])
+}
+
+/**
+ * =========================
+ * Promociones
+ * =========================
+ */
+model Promotion {
+  id         String    @id @default(cuid())
+  title      String?
+  imageKey   String
+  linkUrl    String?
+  serviceId  String?
+  categoryId String?
+  isActive   Boolean   @default(true)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  order      Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  service  Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  category Category? @relation("CategoryPromotions", fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([isActive, startsAt, endsAt])
+  @@index([order, createdAt])
+  @@index([categoryId])
+  @@index([serviceId])
 }
 
 /**
@@ -212,7 +291,6 @@ model Review {
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Un usuario solo puede reseñar una vez cada servicio
   @@unique([userId, serviceId])
   @@index([serviceId])
   @@index([userId])
@@ -235,11 +313,9 @@ model PasswordReset {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Índices para tareas de limpieza y validación
   @@index([userId, expiresAt])
   @@index([expiresAt])
   @@index([userId, usedAt])
-  // 🔧 Mantener snake_case en la base para evitar el conflicto con "PasswordReset"
   @@map("password_resets")
 }
 
@@ -260,4 +336,129 @@ model Favorite {
   @@unique([userId, serviceId])
   @@index([userId])
   @@index([serviceId])
+}
+
+/**
+ * =========================
+ * Admin (reportes, reservas, pagos)
+ * =========================
+ */
+model Report {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reporter   User?   @relation("reportsMade", fields: [reporterId], references: [id])
+  reporterId String?
+
+  targetType  ReportTargetType
+  targetId    String
+  status      ReportStatus     @default(PENDING)
+  reason      String?
+  description String?
+
+  handledBy   User?   @relation("reportsHandled", fields: [handledById], references: [id])
+  handledById String?
+}
+
+model Booking {
+  id         String        @id @default(cuid())
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  client     User          @relation("clientBookings", fields: [clientId], references: [id])
+  clientId   String
+  provider   User          @relation("providerBookings", fields: [providerId], references: [id])
+  providerId String
+  service    Service       @relation(fields: [serviceId], references: [id])
+  serviceId  String
+  startAt    DateTime?
+  endAt      DateTime?
+  amount     Decimal       @db.Decimal(10, 2)
+  currency   String        @default("USD")
+  status     BookingStatus @default(PENDING)
+  payments   Payment[]     @relation("bookingPayments")
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  amount    Decimal       @db.Decimal(10, 2)
+  currency  String        @default("USD")
+  method    String?
+  status    PaymentStatus @default(PENDING)
+
+  user       User?    @relation("paymentsMade", fields: [userId], references: [id])
+  userId     String?
+  provider   User?    @relation("paymentsReceived", fields: [providerId], references: [id])
+  providerId String?
+  booking    Booking? @relation("bookingPayments", fields: [bookingId], references: [id])
+  bookingId  String?
+}
+
+/**
+ * =========================
+ * Chat & Mensajería
+ * =========================
+ */
+
+/// Conversación entre dos usuarios (cliente-proveedor)
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Participantes
+  clientId   String
+  providerId String
+
+  // Relación con el servicio (opcional, para contexto)
+  serviceId String?
+  service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  // Último mensaje para ordenar conversaciones
+  lastMessageAt   DateTime?
+  lastMessageText String?
+
+  // Mensajes de esta conversación
+  messages Message[]
+
+  // Usuarios participantes
+  client   User @relation("ClientConversations", fields: [clientId], references: [id], onDelete: Cascade)
+  provider User @relation("ProviderConversations", fields: [providerId], references: [id], onDelete: Cascade)
+
+  // Una conversación única por par cliente-proveedor
+  @@unique([clientId, providerId])
+  @@index([clientId])
+  @@index([providerId])
+  @@index([serviceId])
+  @@index([lastMessageAt])
+}
+
+/// Mensajes individuales en una conversación
+model Message {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // Remitente
+  senderId String
+  sender   User   @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  // Contenido
+  type    MessageType @default(TEXT)
+  content String      @db.Text
+
+  // Metadata para archivos/imágenes
+  mediaUrl String?
+
+  // Estado de lectura
+  readAt DateTime?
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([readAt])
 }

@@ -1,349 +1,464 @@
 // src/screens/ServiceEditScreen.js
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   SafeAreaView,
   View,
   Text,
   StyleSheet,
-  TextInput,
-  Alert,
-  TouchableOpacity,
   ScrollView,
+  TouchableOpacity,
   ActivityIndicator,
   Platform,
+  Alert,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
-import PrimaryButton from "../components/common/PrimaryButton";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useAuth } from "../context/AuthContext";
 import { API_URL, getAuthToken } from "../services/api";
+import Input from "../components/common/Input";
+import PickerField from "../components/common/PickerField";
+import ImageField from "../components/common/ImageField";
+import AppLogo from "../components/common/AppLogo";
 
-/* ===== Paleta CiviHelper (oscuro + glass) ===== */
-const UI = {
-  // texto
-  text: "#FFFFFF",
-  sub: "rgba(255,255,255,0.80)",
-  muted: "rgba(255,255,255,0.70)",
-  helper: "rgba(255,255,255,0.55)",
-
-  // marca
-  primary: "#7C3AED",   // 600
-  primary500: "#A855F7",
-
-  // semánticos
+// Paleta Páginas Amarillas
+const Colors = {
+  primary: "#FFD100",
+  primaryDark: "#F5C400",
+  primaryLight: "#FFF8CC",
+  purple: "#7C3AED",
   success: "#10B981",
-  error: "#EF4444",
-
-  // superficies
-  bg: "#0B0A1A",
-  card: "rgba(255,255,255,0.05)",          // glass
-  input: "rgba(10,10,25,0.85)",            // surface/input
-  border: "rgba(255,255,255,0.10)",        // border/subtle
-  borderInput: "rgba(255,255,255,0.08)",   // border/input
+  danger: "#EF4444",
+  text: "#0F172A",
+  subtext: "#64748B",
+  border: "#E5E7EB",
+  card: "#FFFFFF",
+  bg: "#FAFAFA",
 };
 
-export default function ServiceEditScreen({ navigation, route }) {
-  const { id } = route.params || {};
+const makeShadow = () =>
+  Platform.OS === "android"
+    ? { elevation: 3 }
+    : { shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } };
 
-  const [cats, setCats] = useState([]);
-  const [openCats, setOpenCats] = useState(false);
+export default function ServiceEditScreen({ route }) {
+  const navigation = useNavigation();
+  const { user } = useAuth();
+  const serviceId = route?.params?.id;
 
   const [title, setTitle] = useState("");
-  const [categoryId, setCategoryId] = useState(null);
-  const [city, setCity] = useState("");
-  const [priceFrom, setPriceFrom] = useState("");
   const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [categoryId, setCategoryId] = useState("");
+  const [priceFrom, setPriceFrom] = useState("");
+  const [priceTo, setPriceTo] = useState("");
+  const [city, setCity] = useState("");
+  const [coverUrl, setCoverUrl] = useState("");
 
-  const valid = useMemo(() => {
-    const vTitle = title.trim().length >= 3;
-    const vDesc = description.trim().length >= 20;
-    const vCat = !!categoryId;
-    const vPrice = priceFrom === "" || (!isNaN(Number(priceFrom)) && Number(priceFrom) >= 0);
-    return vTitle && vDesc && vCat && vPrice;
-  }, [title, description, categoryId, priceFrom]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingService, setLoadingService] = useState(true);
+  const [loadingCategories, setLoadingCategories] = useState(true);
 
-  const loadCats = useCallback(async () => {
+  const loadCategories = async () => {
     try {
+      setLoadingCategories(true);
       const res = await fetch(`${API_URL}/categories`);
       const data = await res.json();
-      setCats(Array.isArray(data) ? data : []);
-    } catch {
-      setCats([]);
+      const list = Array.isArray(data) ? data : data?.items || [];
+      setCategories(list);
+    } catch (err) {
+      console.error("Error cargando categorías:", err);
+    } finally {
+      setLoadingCategories(false);
     }
+  };
+
+  const loadService = useCallback(async () => {
+    if (!serviceId) return;
+
+    try {
+      setLoadingService(true);
+      const token = getAuthToken?.();
+      const res = await fetch(`${API_URL}/services/${serviceId}`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.message || "No se pudo cargar el servicio");
+      }
+
+      setTitle(data.title || "");
+      setDescription(data.description || "");
+      setCategoryId(String(data.categoryId || ""));
+      setPriceFrom(data.priceFrom != null ? String(data.priceFrom) : "");
+      setPriceTo(data.priceTo != null ? String(data.priceTo) : "");
+      setCity(data.city || "");
+      setCoverUrl(data.coverUrl || "");
+    } catch (err) {
+      Alert.alert("Error", err.message || "No se pudo cargar el servicio");
+    } finally {
+      setLoadingService(false);
+    }
+  }, [serviceId]);
+
+  useEffect(() => {
+    loadCategories();
   }, []);
 
-  const loadSvc = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_URL}/services/${id}`);
-      const s = await res.json();
-      setTitle(s.title || "");
-      setCategoryId(s.categoryId || null);
-      setCity(s.city || "");
-      setPriceFrom(s.priceFrom != null ? String(s.priceFrom) : "");
-      setDescription(s.description || "");
-    } catch {
-      Alert.alert("Error", "No se pudo cargar el servicio.");
-      navigation.goBack();
-    } finally {
-      setLoading(false);
+  useFocusEffect(
+    useCallback(() => {
+      loadService();
+    }, [loadService])
+  );
+
+  const handleUpdate = async () => {
+    if (!title.trim() || !description.trim() || !categoryId) {
+      Alert.alert("Error", "Por favor completa todos los campos obligatorios");
+      return;
     }
-  }, [id, navigation]);
 
-  useEffect(() => { loadCats(); }, [loadCats]);
-  useEffect(() => { loadSvc(); }, [loadSvc]);
-
-  const submit = async () => {
-    if (!valid) return;
     try {
-      setSaving(true);
+      setLoading(true);
       const token = getAuthToken?.();
       const body = {
         title: title.trim(),
         description: description.trim(),
-        categoryId,
+        categoryId: Number(categoryId),
+        priceFrom: priceFrom ? Number(priceFrom) : null,
+        priceTo: priceTo ? Number(priceTo) : null,
         city: city.trim() || null,
-        priceFrom: priceFrom === "" ? null : Number(priceFrom),
+        coverUrl: coverUrl || null,
       };
-      const res = await fetch(`${API_URL}/services/${id}`, {
-        method: "PATCH",
+
+      const res = await fetch(`${API_URL}/services/${serviceId}`, {
+        method: "PUT",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || "No se pudo actualizar el servicio");
-      Alert.alert("Guardado", "Cambios aplicados.");
-      navigation.replace("ServiceDetail", { id });
-    } catch (e) {
-      Alert.alert("Error", e?.message || "No se pudo actualizar");
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.message || "No se pudo actualizar el servicio");
+      }
+
+      Alert.alert("¡Éxito!", "Servicio actualizado correctamente", [
+        {
+          text: "OK",
+          onPress: () => {
+            navigation.goBack();
+          },
+        },
+      ]);
+    } catch (err) {
+      Alert.alert("Error", err.message || "No se pudo actualizar el servicio");
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const remove = async () => {
-    Alert.alert("Eliminar", "¿Eliminar este servicio?", [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Eliminar",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            const token = getAuthToken?.();
-            const res = await fetch(`${API_URL}/services/${id}`, {
-              method: "DELETE",
-              headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            });
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}));
-              throw new Error(data?.message || "No se pudo eliminar");
+  const handleDelete = () => {
+    Alert.alert(
+      "Eliminar servicio",
+      "¿Estás seguro? Esta acción no se puede deshacer.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const token = getAuthToken?.();
+              const res = await fetch(`${API_URL}/services/${serviceId}`, {
+                method: "DELETE",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+              });
+
+              if (!res.ok) {
+                throw new Error("No se pudo eliminar el servicio");
+              }
+
+              Alert.alert("Eliminado", "Servicio eliminado correctamente", [
+                {
+                  text: "OK",
+                  onPress: () => navigation.navigate("MyServices"),
+                },
+              ]);
+            } catch (err) {
+              Alert.alert("Error", err.message);
             }
-            Alert.alert("Listo", "Servicio eliminado");
-            navigation.replace("MyServices");
-          } catch (e) {
-            Alert.alert("Error", e?.message || "No se pudo eliminar");
-          }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
-  if (loading) {
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("MyServices");
+  };
+
+  if (loadingService) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: UI.bg, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={UI.primary500} />
-        <Text style={{ color: UI.sub, marginTop: 8 }}>Cargando…</Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: Colors.bg }}>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.loadingText}>Cargando...</Text>
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: UI.bg }}>
-      {/* Header con gradiente violeta */}
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors.bg }}>
+      {/* Header con gradiente amarillo */}
       <LinearGradient
-        colors={[UI.primary, UI.primary500]}
+        colors={[Colors.primary, Colors.primaryDark]}
+        style={styles.header}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.hero}
       >
-        <View style={styles.heroTop}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn} accessibilityLabel="Volver">
-            <Feather name="arrow-left" size={20} color="#fff" />
+        <View style={styles.headerTop}>
+          <TouchableOpacity
+            onPress={goBack}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Volver"
+          >
+            <Feather name="arrow-left" size={20} color={Colors.text} />
           </TouchableOpacity>
-          <Text style={styles.title}>Editar servicio</Text>
-          <View style={styles.iconBtn} />{/* spacer */}
+
+          <AppLogo
+            source={require("../assets/Logo3.png")}
+            size={32}
+            rounded
+          />
+
+          <TouchableOpacity
+            onPress={handleDelete}
+            style={styles.deleteBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Eliminar servicio"
+          >
+            <Feather name="trash-2" size={18} color={Colors.danger} />
+          </TouchableOpacity>
         </View>
+
+        <Text style={styles.title}>Editar Servicio</Text>
+        <Text style={styles.subtitle}>
+          Actualiza la información de tu servicio
+        </Text>
       </LinearGradient>
 
       <ScrollView
-        contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 24 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.card}>
-          {/* Título */}
-          <Text style={styles.label}>Título</Text>
-          <TextInput
-            style={styles.input}
+          <Text style={styles.sectionTitle}>Información básica</Text>
+
+          <Input
+            label="Título del servicio *"
+            placeholder="Ej: Plomería profesional"
             value={title}
             onChangeText={setTitle}
-            placeholder="Título"
-            placeholderTextColor={UI.helper}
-          />
-          {title.length > 0 && title.trim().length < 3 && (
-            <Text style={styles.err}>Mínimo 3 caracteres.</Text>
-          )}
-
-          {/* Categoría */}
-          <Text style={[styles.label, { marginTop: 12 }]}>Categoría</Text>
-          <TouchableOpacity style={styles.select} onPress={() => setOpenCats((s) => !s)}>
-            <Text style={{ color: categoryId ? UI.text : UI.helper }}>
-              {categoryId
-                ? cats.find((c) => c.id === categoryId)?.name || "Seleccionada"
-                : "Selecciona una categoría"}
-            </Text>
-            <Feather name={openCats ? "chevron-up" : "chevron-down"} size={18} color={UI.muted} />
-          </TouchableOpacity>
-
-          {openCats && (
-            <View style={styles.dropdown}>
-              {cats.map((c, idx) => (
-                <TouchableOpacity
-                  key={c.id || String(idx)}
-                  style={[styles.option, idx < cats.length - 1 && styles.optionDivider]}
-                  onPress={() => {
-                    setCategoryId(c.id);
-                    setOpenCats(false);
-                  }}
-                >
-                  <Text style={{ color: UI.text }}>{c.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Ciudad */}
-          <Text style={[styles.label, { marginTop: 12 }]}>Ciudad (opcional)</Text>
-          <TextInput
-            style={styles.input}
-            value={city}
-            onChangeText={setCity}
-            placeholder="Ciudad"
-            placeholderTextColor={UI.helper}
+            maxLength={100}
           />
 
-          {/* Precio */}
-          <Text style={[styles.label, { marginTop: 12 }]}>Precio desde (opcional)</Text>
-          <TextInput
-            style={styles.input}
-            value={priceFrom}
-            onChangeText={setPriceFrom}
-            placeholder="25000"
-            placeholderTextColor={UI.helper}
-            keyboardType="numeric"
-          />
-          {priceFrom !== "" && (isNaN(Number(priceFrom)) || Number(priceFrom) < 0) && (
-            <Text style={styles.err}>Debe ser número mayor o igual a 0.</Text>
-          )}
-
-          {/* Descripción */}
-          <Text style={[styles.label, { marginTop: 12 }]}>Descripción</Text>
-          <TextInput
-            style={[styles.input, { height: 120, textAlignVertical: "top", paddingTop: 12 }]}
+          <Input
+            label="Descripción *"
+            placeholder="Describe tu servicio..."
             value={description}
             onChangeText={setDescription}
-            placeholder="Describe tu servicio"
-            placeholderTextColor={UI.helper}
             multiline
+            numberOfLines={4}
+            maxLength={500}
           />
-          {description.length > 0 && description.trim().length < 20 && (
-            <Text style={styles.err}>Mínimo 20 caracteres.</Text>
-          )}
 
-          {/* Acciones */}
-          <PrimaryButton onPress={submit} disabled={!valid} loading={saving} style={{ marginTop: 12 }}>
-            Guardar cambios
-          </PrimaryButton>
+          <PickerField
+            label="Categoría *"
+            value={categoryId}
+            onValueChange={setCategoryId}
+            items={categories.map((c) => ({
+              label: c.name,
+              value: String(c.id),
+            }))}
+            loading={loadingCategories}
+          />
 
-          <TouchableOpacity onPress={remove} style={{ marginTop: 12, alignSelf: "center" }}>
-            <Text style={{ color: UI.error, fontWeight: "800" }}>Eliminar servicio</Text>
-          </TouchableOpacity>
+          <Input
+            label="Ciudad"
+            placeholder="Ej: Santiago"
+            value={city}
+            onChangeText={setCity}
+            maxLength={50}
+          />
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Precio</Text>
+
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Input
+                label="Desde"
+                placeholder="0"
+                value={priceFrom}
+                onChangeText={setPriceFrom}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Input
+                label="Hasta"
+                placeholder="0"
+                value={priceTo}
+                onChangeText={setPriceTo}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+
+          <Text style={styles.hint}>
+            Deja en blanco si prefieres "Precio a convenir"
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Imagen de portada</Text>
+          <ImageField 
+            value={coverUrl} 
+            onChangeText={setCoverUrl}
+          />
+        </View>
+
+        {/* Botón actualizar */}
+        <TouchableOpacity
+          onPress={handleUpdate}
+          disabled={loading}
+          style={[styles.btn, loading && { opacity: 0.6 }]}
+          accessibilityRole="button"
+        >
+          {loading ? (
+            <ActivityIndicator color={Colors.text} />
+          ) : (
+            <>
+              <Feather name="save" size={20} color={Colors.text} />
+              <Text style={styles.btnText}>Guardar Cambios</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: {
+  header: {
     paddingHorizontal: 16,
-    paddingTop: Platform.select({ ios: 10, android: 12, default: 12 }),
-    paddingBottom: 16,
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
+    paddingTop: Platform.select({ ios: 6, android: 10, default: 10 }),
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  iconBtn: {
+  headerTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  backBtn: {
     width: 36,
     height: 36,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.45)",
+    backgroundColor: Colors.card,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.12)",
+    ...makeShadow(),
   },
-  title: { color: "#fff", fontSize: 20, fontWeight: "800" },
-
-  card: {
-    backgroundColor: UI.card,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: Platform.OS === "web" ? 1 : StyleSheet.hairlineWidth,
-    borderColor: UI.border,
-    ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 14, shadowOffset: { width: 0, height: 8 } },
-      android: { elevation: 3 },
-      web: { backdropFilter: "blur(10px)" },
-    }),
-  },
-
-  label: { color: UI.sub, fontSize: 13, marginBottom: 6, fontWeight: "700" },
-
-  input: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: UI.borderInput,
+  deleteBtn: {
+    width: 36,
+    height: 36,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    backgroundColor: UI.input,
-    color: UI.text,
-  },
-
-  select: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: UI.borderInput,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    backgroundColor: UI.input,
+    backgroundColor: Colors.card,
     alignItems: "center",
+    justifyContent: "center",
+    ...makeShadow(),
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: Colors.text,
+    opacity: 0.7,
+  },
+  content: {
+    padding: 16,
+    gap: 16,
+    paddingBottom: 40,
+  },
+  card: {
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    padding: 16,
+    gap: 16,
+    ...makeShadow(),
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  row: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 12,
   },
-
-  dropdown: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: UI.borderInput,
+  hint: {
+    fontSize: 12,
+    color: Colors.subtext,
+    fontStyle: "italic",
+  },
+  btn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
     borderRadius: 12,
-    backgroundColor: UI.input,
-    overflow: "hidden",
+    ...makeShadow(),
   },
-  option: { padding: 12 },
-  optionDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: UI.borderInput },
-
-  err: { color: UI.error, marginTop: 6, fontSize: 12 },
+  btnText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: Colors.text,
+  },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: Colors.subtext,
+    fontSize: 14,
+  },
 });

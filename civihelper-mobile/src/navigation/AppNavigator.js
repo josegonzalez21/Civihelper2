@@ -1,5 +1,6 @@
 // src/navigation/AppNavigator.js
 import React from "react";
+import { View, Text } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
 import Colors from "../theme/color";
@@ -13,6 +14,9 @@ import ForgotPasswordScreen from "../screens/ForgotPasswordScreen";
 
 // Router por rol (Tabs según rol)
 import RoleRouter from "./RoleRouter";
+
+// Navegador de Mapa
+import MapNavigator from "./MapNavigator";
 
 // Comunes (accesibles desde Tabs)
 import SearchScreen from "../screens/SearchScreen";
@@ -28,13 +32,41 @@ import ReviewCreateScreen from "../screens/ReviewCreateScreen";
 import FavoritesScreen from "../screens/FavoritesScreen";
 import MyReviewsScreen from "../screens/MyReviewsScreen";
 
-// Admin (también enlazables desde Home/Admin)
+// Chat - ✅ Corregido el import
+import ConversationsScreen from "../screens/ConversationsScreen";
+import ChatScreen from "../screens/ChatScreen";
+
+// Admin
+import AdminHome from "../screens/admin/AdminHome";
+import AdminDashboard from "../screens/admin/AdminDashboard";
 import AdminServices from "../screens/admin/AdminServices";
 import AdminUsers from "../screens/admin/AdminUsers";
 import AdminModeration from "../screens/admin/AdminModeration";
 import AdminCategories from "../screens/admin/AdminCategories";
+import AdminPromotionCreate from "../screens/admin/AdminPromotionCreate";
+import AdminSettings from "../screens/admin/AdminSettings";
+import AdminPromotions from "../screens/admin/AdminPromotions";
 
 const Stack = createNativeStackNavigator();
+
+/** Placeholders mínimos por si aún no existen esas pantallas */
+const Placeholder = ({ title = "Próximamente" }) => (
+  <View
+    style={{
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: Colors.bg,
+    }}
+  >
+    <Text style={{ color: Colors.text, fontSize: 16, fontWeight: "700" }}>
+      {title}
+    </Text>
+  </View>
+);
+
+const NewRequestScreen = () => <Placeholder title="Nueva Solicitud" />;
+const SupportScreen = () => <Placeholder title="Soporte" />;
 
 export default function AppNavigator() {
   const { loading, token, user } = useAuth();
@@ -50,7 +82,7 @@ export default function AppNavigator() {
         headerShown: false,
         animation: "fade",
         detachPreviousScreen: false,
-        contentStyle: { backgroundColor: Colors.bg }, // fondo consistente con el tema
+        contentStyle: { backgroundColor: Colors.bg },
       }}
     >
       {isAuthed ? (
@@ -65,10 +97,15 @@ export default function AppNavigator() {
           {/* ======= Pilas estándar (push) ======= */}
           <Stack.Group screenOptions={{ animation: "slide_from_right" }}>
             {/* Admin */}
-            <Stack.Screen name="AdminServices" component={AdminServices} />
-            <Stack.Screen name="AdminUsers" component={AdminUsers} />
-            <Stack.Screen name="AdminModeration" component={AdminModeration} />
             <Stack.Screen name="AdminCategories" component={AdminCategories} />
+            <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
+            <Stack.Screen name="AdminHome" component={AdminHome} />
+            <Stack.Screen name="AdminModeration" component={AdminModeration} />
+            <Stack.Screen name="AdminPromotionCreate" component={AdminPromotionCreate} />
+            <Stack.Screen name="AdminPromotions" component={AdminPromotions} />
+            <Stack.Screen name="AdminServices" component={AdminServices} />
+            <Stack.Screen name="AdminSettings" component={AdminSettings} />
+            <Stack.Screen name="AdminUsers" component={AdminUsers} />
 
             {/* Comunes */}
             <Stack.Screen name="Search" component={SearchScreen} />
@@ -79,15 +116,42 @@ export default function AppNavigator() {
 
             {/* Categorías / Detalles */}
             <Stack.Screen name="Category" component={CategoryScreen} />
+            <Stack.Screen name="Service" component={ServiceDetailScreen} />
             <Stack.Screen name="ServiceDetail" component={ServiceDetailScreen} />
             <Stack.Screen name="ReviewCreate" component={ReviewCreateScreen} />
 
-            {/* Proveedor (pantallas no-modales) */}
+            {/* Proveedor (no modales) */}
             <Stack.Screen name="MyServices" component={MyServicesScreen} />
             <Stack.Screen name="ProviderStats" component={ProviderStatsScreen} />
+
+            {/* ✅ Chat - Lista de conversaciones */}
+            <Stack.Screen 
+              name="Conversations" 
+              component={ConversationsScreen}
+              options={{
+                title: "Mensajes",
+                animation: "slide_from_right",
+              }}
+            />
+
+            {/* ✅ Chat - Conversación individual */}
+            <Stack.Screen 
+              name="Chat" 
+              component={ChatScreen}
+              options={{
+                animation: "slide_from_right",
+              }}
+            />
+            
+            {/* MAPA - Navigator completo */}
+            <Stack.Screen 
+              name="Map" 
+              component={MapNavigator}
+              options={{ animation: "slide_from_bottom" }}
+            />
           </Stack.Group>
 
-          {/* ======= Modales (presentación iOS/Android coherente) ======= */}
+          {/* ======= Modales ======= */}
           <Stack.Group
             screenOptions={{
               presentation: "modal",
@@ -96,6 +160,8 @@ export default function AppNavigator() {
           >
             <Stack.Screen name="ServiceCreate" component={ServiceCreateScreen} />
             <Stack.Screen name="ServiceEdit" component={ServiceEditScreen} />
+            <Stack.Screen name="NewRequest" component={NewRequestScreen} />
+            <Stack.Screen name="Support" component={SupportScreen} />
           </Stack.Group>
         </>
       ) : (

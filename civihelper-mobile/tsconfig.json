@@ -28,7 +28,7 @@
     "src",
     "App.js",
     "index.js",
-    "tamagui.config.ts",
+    "tamagui.config.js",
     "**/*.d.ts"
   ],
   "exclude": [

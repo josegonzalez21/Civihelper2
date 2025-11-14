@@ -21,7 +21,6 @@ import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 
-import Colors, { spacing, radius, shadows } from "../../theme/color";
 import RoleGuard from "../../components/RoleGuard";
 import {
   categoriesTree,
@@ -31,6 +30,58 @@ import {
   adminCreateCategoryMultipart,
   adminUpdateCategoryMultipart,
 } from "../../services/api";
+
+/* =========================
+   PALETA AMARILLA
+========================= */
+const COLORS = {
+  yellow: "#FFD100",
+  yellowDark: "#F5C400",
+  yellowLight: "#FFF8CC",
+  purple: "#7C3AED",
+  white: "#FFFFFF",
+  bg: "#FAFAFA",
+  card: "#FFFFFF",
+  border: "#E5E7EB",
+  text: "#111827",
+  textSecondary: "#6B7280",
+  danger: "#B91C1C",
+  info: "#3B82F6",
+  gray100: "#F3F4F6",
+  gray200: "#E5E7EB",
+  gray50: "#F9FAFB",
+  shadow: "rgba(0,0,0,0.08)",
+};
+
+const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 14,
+  lg: 18,
+  xl: 24,
+};
+const radius = {
+  sm: 8,
+  md: 12,
+  lg: 18,
+  xl: 22,
+};
+const shadows = {
+  sm: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  md: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+};
 
 /* =========================
    Constantes UI
@@ -54,19 +105,18 @@ function Header({ onCreateArea }) {
 
   const safeBack = () => {
     if (navigation?.canGoBack?.()) navigation.goBack();
-    else navigation.navigate("AdminHome"); // si entraste por la tab, vuelve al panel
+    else navigation.navigate("AdminHome");
   };
 
   const showBack = navigation?.canGoBack?.() === true;
 
   return (
     <LinearGradient
-      colors={Colors.gradients?.hero || [Colors.primary, "#111827"]}
+      colors={[COLORS.yellow, COLORS.yellowDark]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={s.header}
     >
-      {/* Fila superior: botón volver (condicional) */}
       <View style={s.headerTopRow}>
         {showBack ? (
           <TouchableOpacity
@@ -75,17 +125,16 @@ function Header({ onCreateArea }) {
             accessibilityLabel="Volver"
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Feather name="arrow-left" size={20} color="#fff" />
+            <Feather name="arrow-left" size={20} color={COLORS.text} />
           </TouchableOpacity>
         ) : null}
       </View>
 
-      {/* Contenido: título, subtítulo y botón crear */}
       <View style={s.headerContent}>
         <Text style={s.kicker}>Panel admin</Text>
         <Text style={s.title}>Áreas & Derivados</Text>
         <Text style={s.sub}>
-          Estructura el catálogo por áreas (root) y sub-áreas. Puedes asignar sector e imágenes.
+          Crea y organiza las categorías raíz y sus subcategorías. Puedes asignar sector e imágenes.
         </Text>
 
         <TouchableOpacity
@@ -94,7 +143,7 @@ function Header({ onCreateArea }) {
           accessibilityRole="button"
           accessibilityLabel="Crear área"
         >
-          <Feather name="plus" size={18} color="#0F172A" />
+          <Feather name="plus" size={18} color={COLORS.text} />
           <Text style={s.primaryBtnTxt}>Nueva Área</Text>
         </TouchableOpacity>
       </View>
@@ -113,17 +162,8 @@ function ItemRow({ item, onAddChild, onEdit, onDelete }) {
           {item.iconUrl ? (
             <Image source={{ uri: item.iconUrl }} style={s.miniIcon} resizeMode="cover" />
           ) : (
-            <View
-              style={[
-                s.miniIcon,
-                {
-                  backgroundColor: Colors.withOpacity(Colors.primary, 0.12),
-                  alignItems: "center",
-                  justifyContent: "center",
-                },
-              ]}
-            >
-              <Feather name="image" size={14} color={Colors.primary} />
+            <View style={s.miniIconPlaceholder}>
+              <Feather name="image" size={14} color={COLORS.yellowDark} />
             </View>
           )}
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -144,21 +184,21 @@ function ItemRow({ item, onAddChild, onEdit, onDelete }) {
             style={[s.iconBtn, s.iconBtnAccent]}
             accessibilityLabel="Agregar derivado"
           >
-            <Feather name="plus-circle" size={18} color={Colors.primary} />
+            <Feather name="plus-circle" size={18} color={COLORS.yellowDark} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => onEdit(item)}
             style={s.iconBtn}
             accessibilityLabel="Editar área"
           >
-            <Feather name="edit-2" size={18} color={Colors.text} />
+            <Feather name="edit-2" size={18} color={COLORS.text} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => onDelete(item)}
             style={s.iconBtnDanger}
             accessibilityLabel="Desactivar área"
           >
-            <Feather name="trash-2" size={18} color="#fff" />
+            <Feather name="trash-2" size={18} color={COLORS.white} />
           </TouchableOpacity>
         </View>
       </View>
@@ -170,7 +210,7 @@ function ItemRow({ item, onAddChild, onEdit, onDelete }) {
               {c.iconUrl ? (
                 <Image source={{ uri: c.iconUrl }} style={s.childIconImg} />
               ) : (
-                <Feather name="tag" size={12} color={Colors.sub} />
+                <Feather name="tag" size={12} color={COLORS.textSecondary} />
               )}
               <Text style={s.childTxt} numberOfLines={1}>
                 {c.name}
@@ -181,14 +221,14 @@ function ItemRow({ item, onAddChild, onEdit, onDelete }) {
                   style={s.childIcon}
                   accessibilityLabel="Editar sub-área"
                 >
-                  <Feather name="edit-2" size={14} color={Colors.text} />
+                  <Feather name="edit-2" size={14} color={COLORS.text} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => onDelete(c)}
                   style={[s.childIcon, s.childIconDanger]}
                   accessibilityLabel="Desactivar sub-área"
                 >
-                  <Feather name="x" size={14} color="#fff" />
+                  <Feather name="x" size={14} color={COLORS.white} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -202,14 +242,14 @@ function ItemRow({ item, onAddChild, onEdit, onDelete }) {
 }
 
 /* =========================
-   Modal avanzado (nombre + sector + imágenes)
+   Modal
 ========================= */
 function CategoryModal({
   visible,
-  mode, // "create_area" | "create_child" | "edit"
-  initial = {}, // { name, sector, iconUrl, coverUrl }
+  mode,
+  initial = {},
   onCancel,
-  onSubmit, // ({ name, sector, iconFile, coverFile }) => void
+  onSubmit,
 }) {
   const [name, setName] = useState(initial?.name || "");
   const [sector, setSector] = useState(initial?.sector || "OTHER");
@@ -226,7 +266,6 @@ function CategoryModal({
   }, [visible, initial]);
 
   async function pick(kind) {
-    // FIX: usar MediaTypeOptions.Images
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -268,29 +307,28 @@ function CategoryModal({
             value={name}
             onChangeText={setName}
             placeholder="Nombre"
-            placeholderTextColor={Colors.sub}
+            placeholderTextColor={COLORS.textSecondary}
             style={s.modalInput}
             autoFocus
             returnKeyType="done"
             onSubmitEditing={submit}
           />
 
-          {/* Selector de sector */}
           <Text style={[s.modalTitle, { marginTop: spacing.sm }]}>Sector</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+          <View style={s.chipsRow}>
             {SECTORS.map((opt) => (
               <TouchableOpacity
                 key={opt}
                 onPress={() => setSector(opt)}
                 style={[
                   s.chipSel,
-                  sector === opt && { backgroundColor: "#EEF2FF", borderColor: "#C7D2FE" },
+                  sector === opt && { backgroundColor: `${COLORS.yellow}18`, borderColor: COLORS.yellowDark },
                 ]}
               >
                 <Text
                   style={[
                     s.chipSelTxt,
-                    sector === opt && { color: Colors.primary, fontWeight: "800" },
+                    sector === opt && { color: COLORS.text, fontWeight: "800" },
                   ]}
                 >
                   {sectorLabel[opt]}
@@ -299,8 +337,7 @@ function CategoryModal({
             ))}
           </View>
 
-          {/* Subida de imágenes */}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: spacing.md }}>
+          <View style={s.uploadRow}>
             <TouchableOpacity onPress={() => pick("icon")} style={[s.btn, s.btnGhost]}>
               <Text style={s.btnGhostTxt}>{iconFile ? "Icono listo ✓" : "Subir icono"}</Text>
             </TouchableOpacity>
@@ -334,7 +371,7 @@ export default function AdminCategories() {
 
   const [modal, setModal] = useState({
     visible: false,
-    mode: "create_area", // "create_area" | "create_child" | "edit"
+    mode: "create_area",
     initial: {},
     onSubmit: null,
   });
@@ -486,21 +523,21 @@ export default function AdminCategories() {
 
   return (
     <RoleGuard allow={["ADMIN"]}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: Colors.bg }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
         <Header onCreateArea={handleCreateArea} />
 
         {loading ? (
           <View style={s.loadingBox}>
-            <ActivityIndicator />
+            <ActivityIndicator color={COLORS.yellowDark} />
             <Text style={s.muted}>Cargando árbol…</Text>
           </View>
         ) : (
           <FlatList
             data={tree}
             keyExtractor={(x) => String(x.id)}
-            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md }}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm }}
             ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.yellowDark]} />}
             renderItem={({ item }) => (
               <ItemRow
                 item={item}
@@ -527,7 +564,7 @@ export default function AdminCategories() {
 
         {busy && (
           <View style={s.busyOverlay}>
-            <ActivityIndicator />
+            <ActivityIndicator color={COLORS.white} />
           </View>
         )}
       </SafeAreaView>
@@ -536,7 +573,7 @@ export default function AdminCategories() {
 }
 
 /* =========================
-   Estilos (alineados al proyecto y márgenes seguros)
+   Estilos
 ========================= */
 const s = StyleSheet.create({
   header: {
@@ -553,40 +590,39 @@ const s = StyleSheet.create({
   backBtn: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 14,
+    backgroundColor: COLORS.white,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.4)",
+    borderColor: "rgba(0,0,0,0.05)",
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "flex-start",
   },
   headerContent: { flexDirection: "column", gap: spacing.sm },
-  kicker: { color: "#DBEAFE", fontSize: 11, letterSpacing: 1 },
-  title: { color: "#fff", fontSize: 22, fontWeight: "800" },
-  sub: { color: "rgba(255,255,255,0.92)", marginTop: 2 },
+  kicker: { color: "#4B5563", fontSize: 11, letterSpacing: 0.3, fontWeight: "600" },
+  title: { color: COLORS.text, fontSize: 22, fontWeight: "800" },
+  sub: { color: "#1F2937", marginTop: 2, opacity: 0.85 },
 
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     borderRadius: 999,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 10,
     marginTop: spacing.md,
-    alignSelf: "flex-start",
     ...shadows.sm,
   },
-  primaryBtnTxt: { color: "#0F172A", fontWeight: "800" },
+  primaryBtnTxt: { color: COLORS.text, fontWeight: "800" },
 
   loadingBox: { padding: spacing.lg, alignItems: "center", gap: 8 },
 
   card: {
-    backgroundColor: Colors.card,
+    backgroundColor: COLORS.card,
     borderRadius: radius.xl,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: COLORS.border,
     ...shadows.md,
   },
   cardHeader: {
@@ -596,8 +632,8 @@ const s = StyleSheet.create({
     flexWrap: "wrap",
     rowGap: 8,
   },
-  cardTitle: { fontSize: 16, fontWeight: "800", color: Colors.text },
-  cardSub: { color: Colors.sub, fontSize: 12, marginTop: 2 },
+  cardTitle: { fontSize: 16, fontWeight: "800", color: COLORS.text },
+  cardSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
 
   rowActions: {
     flexDirection: "row",
@@ -606,18 +642,18 @@ const s = StyleSheet.create({
     maxWidth: "100%",
   },
   iconBtn: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: COLORS.gray50,
     padding: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: COLORS.border,
   },
   iconBtnAccent: {
-    backgroundColor: "#EEF2FF",
-    borderColor: "#E0E7FF",
+    backgroundColor: `${COLORS.yellow}25`,
+    borderColor: `${COLORS.yellowDark}40`,
   },
   iconBtnDanger: {
-    backgroundColor: "#B91C1C",
+    backgroundColor: COLORS.danger,
     padding: 8,
     borderRadius: 999,
   },
@@ -637,39 +673,53 @@ const s = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.card,
-    ...shadows.xs,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.card,
+    ...shadows.sm,
     maxWidth: "100%",
   },
-  childTxt: { color: Colors.text, fontWeight: "700", fontSize: 12, flexShrink: 1, maxWidth: 220 },
+  childTxt: {
+    color: COLORS.text,
+    fontWeight: "700",
+    fontSize: 12,
+    flexShrink: 1,
+    maxWidth: 220,
+  },
   childIcon: {
     paddingVertical: 4,
     paddingHorizontal: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "#F8FAFC",
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.gray50,
   },
   childIconDanger: {
-    backgroundColor: "#B91C1C",
-    borderColor: "#B91C1C",
+    backgroundColor: COLORS.danger,
+    borderColor: COLORS.danger,
   },
   childIconImg: {
     width: 16,
     height: 16,
     borderRadius: 4,
-    backgroundColor: Colors.withOpacity(Colors.primary, 0.08),
+    backgroundColor: `${COLORS.yellow}15`,
   },
 
   miniIcon: {
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: "#EFF6FF",
+    backgroundColor: COLORS.gray100,
+  },
+  miniIconPlaceholder: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: `${COLORS.yellow}15`,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
-  muted: { color: Colors.sub },
+  muted: { color: COLORS.textSecondary },
 
   empty: { alignItems: "center", padding: spacing.lg },
 
@@ -680,7 +730,6 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(15,23,42,0.25)",
   },
 
-  // Modal
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -691,33 +740,46 @@ const s = StyleSheet.create({
   modalCard: {
     width: "100%",
     maxWidth: 420,
-    backgroundColor: Colors.card,
+    backgroundColor: COLORS.card,
     borderRadius: radius.lg,
     padding: spacing.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: COLORS.border,
     ...shadows.md,
   },
-  modalTitle: { fontSize: 16, fontWeight: "800", color: Colors.text },
+  modalTitle: { fontSize: 16, fontWeight: "800", color: COLORS.text },
   modalInput: {
     marginTop: spacing.sm,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: COLORS.border,
     borderRadius: radius.md,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: Colors.text,
-    backgroundColor: "#fff",
+    color: COLORS.text,
+    backgroundColor: COLORS.white,
+  },
+  chipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 6,
   },
   chipSel: {
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: COLORS.border,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: Colors.card,
+    backgroundColor: COLORS.card,
   },
-  chipSelTxt: { color: Colors.text, fontWeight: "700", fontSize: 12 },
+  chipSelTxt: { color: COLORS.text, fontWeight: "700", fontSize: 12 },
+
+  uploadRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: spacing.md,
+  },
 
   modalRow: {
     marginTop: spacing.md,
@@ -732,11 +794,11 @@ const s = StyleSheet.create({
     borderRadius: radius.md,
   },
   btnGhost: {
-    backgroundColor: "#F1F5F9",
+    backgroundColor: COLORS.gray100,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: COLORS.border,
   },
-  btnGhostTxt: { color: Colors.text, fontWeight: "700" },
-  btnPrimary: { backgroundColor: Colors.primary },
-  btnPrimaryTxt: { color: "#fff", fontWeight: "800" },
+  btnGhostTxt: { color: COLORS.text, fontWeight: "700" },
+  btnPrimary: { backgroundColor: COLORS.yellowDark },
+  btnPrimaryTxt: { color: COLORS.text, fontWeight: "800" },
 });

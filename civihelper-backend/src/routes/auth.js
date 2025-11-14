@@ -5,11 +5,19 @@ import { z } from "zod";
 
 import { prisma } from "../lib/prisma.js";
 import { signJWT } from "../lib/jwt.js";
-import { registerSchema, loginSchema, socialSchema } from "../validators/auth.js";
+import {
+  registerSchema,
+  loginSchema,
+  socialSchema,
+} from "../validators/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 
-// Rate limit helpers (normalizan IPv6)
-import { createLimiter, ipEmailKey, ipProviderKey } from "../middleware/rateLimit.js";
+// Rate limit helpers (IPv6 OK)
+import {
+  createLimiter,
+  ipEmailKey,
+  ipProviderKey,
+} from "../middleware/rateLimit.js";
 
 /* =============================
    Configuración / helpers
@@ -19,12 +27,9 @@ const isProd = process.env.NODE_ENV === "production";
 const ALLOW_DEMO = !isProd && process.env.DEV_ALLOW_SOCIAL_DEMO === "1";
 
 const providerParamSchema = z.enum(["google", "facebook", "apple"]);
-const googleSchema   = z.object({ idToken: z.string().min(10) });
+const googleSchema = z.object({ idToken: z.string().min(10) });
 const facebookSchema = z.object({ accessToken: z.string().min(10) });
-const appleSchema    = z.object({ identityToken: z.string().min(10) });
-
-// Hash “dummy” (bcrypt de "dummy-password", salt 10) para uniformar tiempo
-const DUMMY_HASH = "$2b$10$0c5Ej5fV7lDkH7wtc6Z0yO9VY2zG6m5pV8W3m3q8Tgk8x3li8Vw1a";
+const appleSchema = z.object({ identityToken: z.string().min(10) });
 
 /** Oculta campos sensibles / internos */
 function safeUser(u) {
@@ -44,6 +49,11 @@ function sendError(res, status, message, extraHeaders) {
   return res.status(status).json({ message: String(message || "Error") });
 }
 
+/* Pequeño helper para añadir un retraso y uniformar tiempos */
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /* =============================
    Rate limiters (con IPv6 OK)
 ============================= */
@@ -60,7 +70,7 @@ const registerLimiter = createLimiter({
   windowMs: 10 * 60 * 1000,
   limit: 5,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => ipEmailKey(req, res).split(":")[0],
+  keyGenerator: (req, res) => ipEmailKey(req, res).split(":")[0], // sólo IP
 });
 
 // Social: por IP+provider, ventana 2 min, 10 intentos (no cuenta éxitos).
@@ -95,7 +105,7 @@ router.post("/register", registerLimiter, async (req, res) => {
     const data = registerSchema.parse(req.body);
 
     const email = String(data.email || "").trim().toLowerCase();
-    const name  = String(data.name || "Usuario").trim().slice(0, 120);
+    const name = String(data.name || "Usuario").trim().slice(0, 120);
 
     const allowedRoles = new Set(["CLIENT", "PROVIDER"]);
     const role = allowedRoles.has(String(data.role)) ? String(data.role) : "CLIENT";
@@ -108,10 +118,7 @@ router.post("/register", registerLimiter, async (req, res) => {
         data: { name, email, role, password: passwordHashVal },
       });
     } catch (e) {
-      // Prisma P2002: unique violation
-      if (e?.code === "P2002") {
-        return sendError(res, 409, "Email ya registrado");
-      }
+      if (e?.code === "P2002") return sendError(res, 409, "Email ya registrado");
       throw e;
     }
 
@@ -135,22 +142,19 @@ router.post("/login", loginLimiter, async (req, res) => {
       where: { email: normalizedEmail },
     });
 
-    // Comparación “dummy” para uniformar tiempo si no existe el usuario
-    let storedForCheck = DUMMY_HASH;
-    if (user) {
-      storedForCheck = String(user.password || user.passwordHash || DUMMY_HASH);
-    }
-    const ok = await bcrypt.compare(String(password), storedForCheck);
-
-    // Si usuario no existe o el hash no coincide (o no hay password real), mensaje genérico
-    if (!user || !ok || !(user.password || user.passwordHash)) {
+    if (!user || !(user.password || user.passwordHash)) {
+      // Uniforma tiempos en caso de usuario inexistente o sin password
+      await sleep(150);
       return sendError(res, 401, "Credenciales inválidas");
     }
+
+    const storedHash = String(user.password || user.passwordHash);
+    const ok = await bcrypt.compare(String(password), storedHash);
+    if (!ok) return sendError(res, 401, "Credenciales inválidas");
 
     const token = signJWT({ sub: user.id, role: user.role, email: user.email });
     return res.json({ token, user: safeUser(user) });
   } catch (e) {
-    // Si el rate limiter puso Retry-After, se conserva
     const retry = res.getHeader("Retry-After");
     const msg = e?.errors?.[0]?.message || e?.message || "Bad Request";
     return sendError(res, 400, msg, retry ? { "Retry-After": retry } : undefined);
@@ -162,7 +166,9 @@ router.post("/login", loginLimiter, async (req, res) => {
 ============================= */
 router.post("/social/:provider", socialLimiter, async (req, res) => {
   try {
-    const provider = providerParamSchema.parse(String(req.params.provider || "").toLowerCase());
+    const provider = providerParamSchema.parse(
+      String(req.params.provider || "").toLowerCase()
+    );
 
     let email, fullName, oauthIdFromIdP;
 
@@ -208,7 +214,8 @@ router.post("/social/:provider", socialLimiter, async (req, res) => {
         email = info.email; // puede ser null en re-logins
         fullName = info.fullName;
         oauthIdFromIdP = info.sub;
-        if (!email) return sendError(res, 400, "Apple no devolvió email. Completa correo en el onboarding.");
+        if (!email)
+          return sendError(res, 400, "Apple no devolvió email. Completa correo en el onboarding.");
       } else if (ALLOW_DEMO) {
         const data = socialSchema.parse(req.body);
         email = data.email;
@@ -230,7 +237,10 @@ router.post("/social/:provider", socialLimiter, async (req, res) => {
 
       if (!u) {
         // Creamos una contraseña “dummy” (no usada para login social)
-        const dummyHash = await bcrypt.hash(`social:${provider}:${oauthIdFromIdP || Date.now()}`, 8);
+        const dummyHash = await bcrypt.hash(
+          `social:${provider}:${oauthIdFromIdP || Date.now()}`,
+          8
+        );
         u = await tx.user.create({
           data: {
             name,
@@ -262,8 +272,14 @@ router.post("/social/:provider", socialLimiter, async (req, res) => {
       return { user: u, created };
     });
 
-    const token = signJWT({ sub: result.user.id, role: result.user.role, email: result.user.email });
-    return res.status(result.created ? 201 : 200).json({ token, user: safeUser(result.user) });
+    const token = signJWT({
+      sub: result.user.id,
+      role: result.user.role,
+      email: result.user.email,
+    });
+    return res
+      .status(result.created ? 201 : 200)
+      .json({ token, user: safeUser(result.user) });
   } catch (e) {
     const retry = res.getHeader("Retry-After");
     const msg = e?.errors?.[0]?.message || e?.message || "Bad Request";

@@ -1,8 +1,9 @@
 // src/routes/me.js
 import express from "express";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
-import { publicUrl } from "../lib/upload.js";
+import { publicUrl, assertImageObject, deleteFromUploads } from "../lib/s3.js";
 
 const router = express.Router();
 
@@ -10,10 +11,24 @@ function userIdFromReq(req) {
   return String(req.user?.id || req.user?.sub || "");
 }
 
+const avatarBodySchema = z.object({
+  key: z.string().trim().min(3, { message: "Falta 'key' de S3" }),
+  thumbKey: z.string().trim().min(3).optional(),
+  deletePrevious: z
+    .preprocess((v) => {
+      if (typeof v === "boolean") return v;
+      if (typeof v === "number") return v !== 0;
+      if (typeof v === "string")
+        return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+      return undefined;
+    }, z.boolean().optional())
+    .default(true),
+});
+
 /**
  * GET /api/me
  * Devuelve el perfil del usuario autenticado (sin contraseña).
- * Nota: avatarUrl viene absolutizada si hay CDN/S3 configurado.
+ * Nota: avatarUrl y avatarThumbUrl se absolutizan si hay CDN/S3 configurado.
  */
 router.get("/", requireAuth, async (req, res, next) => {
   try {
@@ -27,18 +42,18 @@ router.get("/", requireAuth, async (req, res, next) => {
         name: true,
         email: true,
         role: true,
-        avatarUrl: true, // KEY en DB
+        avatarUrl: true,       // Keys en BD
+        avatarThumbUrl: true,  // Key en BD (opcional)
         createdAt: true,
         updatedAt: true,
-        // nunca devolver password fields
       },
     });
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
     return res.json({
       ...user,
-      // convertir KEY → URL pública (si hay CDN/S3 config); si no, puede ser null
       avatarUrl: publicUrl(user.avatarUrl),
+      avatarThumbUrl: publicUrl(user.avatarThumbUrl),
     });
   } catch (e) {
     next(e);
@@ -47,42 +62,88 @@ router.get("/", requireAuth, async (req, res, next) => {
 
 /**
  * PUT /api/me/avatar
- * Guarda la KEY del avatar subido a S3.
- * Body: { key: "uploads/avatars/<userId>/<file>.jpg" }
+ * Guarda la KEY del avatar subido a S3 (con validaciones).
+ * Body: { key: "uploads/avatars/<userId>/<file>.jpg", thumbKey?: string, deletePrevious?: boolean }
  */
 router.put("/avatar", requireAuth, async (req, res, next) => {
   try {
     const uid = userIdFromReq(req);
     if (!uid) return res.status(401).json({ message: "No autenticado" });
 
-    const { key } = req.body || {};
-    if (!key) return res.status(400).json({ message: "Falta 'key' de S3" });
+    const { key, thumbKey, deletePrevious } = avatarBodySchema.parse(req.body || {});
 
-    // Seguridad: la key debe pertenecer a ESTE usuario
-    const ok = new RegExp(`^uploads\\/avatars\\/${uid}\\/`).test(String(key));
-    if (!ok) return res.status(400).json({ message: "La key no corresponde a tu avatar" });
+    // Seguridad: la key (y la miniatura, si viene) deben pertenecer a ESTE usuario por prefijo
+    const belongsMain = new RegExp(`^uploads\\/avatars\\/${uid}\\/`).test(String(key));
+    const belongsThumb = !thumbKey || new RegExp(`^uploads\\/avatars\\/${uid}\\/`).test(String(thumbKey));
+    if (!belongsMain || !belongsThumb) {
+      return res.status(400).json({ message: "La key/miniatura no corresponde a tu avatar" });
+    }
 
-    // Persistir KEY (no URL presignada)
+    // Verifica en S3 que los objetos existen, son imágenes y matchean el kind "avatar"
+    await assertImageObject(String(key), { expectedKind: "avatar" });
+    if (thumbKey) {
+      await assertImageObject(String(thumbKey), { expectedKind: "avatar" });
+    }
+
+    // Obtiene el avatar anterior
+    const prev = await prisma.user.findUnique({
+      where: { id: uid },
+      select: { id: true, name: true, avatarUrl: true, avatarThumbUrl: true },
+    });
+    if (!prev) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    // Idempotente: si es el mismo par de keys, responde sin actualizar
+    if (prev.avatarUrl === key && (thumbKey ? prev.avatarThumbUrl === thumbKey : true)) {
+      return res.json({
+        id: prev.id,
+        name: prev.name,
+        avatarUrl: publicUrl(prev.avatarUrl),
+        avatarThumbUrl: publicUrl(prev.avatarThumbUrl),
+        changed: false,
+      });
+    }
+
+    // Actualiza primero en DB
     const updated = await prisma.user.update({
       where: { id: uid },
-      data: { avatarUrl: String(key) },
+      data: {
+        avatarUrl: String(key),
+        avatarThumbUrl: thumbKey ? String(thumbKey) : null,
+      },
       select: {
         id: true,
         name: true,
         email: true,
         role: true,
         avatarUrl: true,
+        avatarThumbUrl: true,
         createdAt: true,
         updatedAt: true,
       },
     });
 
+    // Luego intenta borrar los anteriores (best-effort)
+    if (deletePrevious) {
+      const tasks = [];
+      if (prev.avatarUrl && prev.avatarUrl !== key) tasks.push(deleteFromUploads(prev.avatarUrl));
+      if (prev.avatarThumbUrl && prev.avatarThumbUrl !== thumbKey) tasks.push(deleteFromUploads(prev.avatarThumbUrl));
+      if (tasks.length) {
+        Promise.allSettled(tasks).catch((err) =>
+          console.warn("[me/avatar] No se pudo borrar avatar anterior:", err?.message || err)
+        );
+      }
+    }
+
     return res.json({
       ...updated,
       avatarUrl: publicUrl(updated.avatarUrl),
+      avatarThumbUrl: publicUrl(updated.avatarThumbUrl),
+      changed: true,
     });
   } catch (e) {
-    if (e?.code === "P2025") return res.status(404).json({ message: "Usuario no encontrado" });
+    if (e?.name === "ZodError") {
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    }
     next(e);
   }
 });
@@ -98,15 +159,14 @@ router.get("/security", requireAuth, async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id: uid },
-      // Ajusta nombres si tu esquema difiere (p.ej. passwordHash)
-      select: { id: true, password: true, passwordHash: true, providers: true },
+      select: { id: true, password: true, providers: true }, // evita campos inexistentes
     });
 
     return res.json({
       lastLoginAt: req.user?.iat ? new Date(req.user.iat * 1000) : null,
       mfaEnabled: false, // implementar en el futuro
       activeSessions: 1, // placeholder
-      hasPassword: Boolean(user?.password || user?.passwordHash),
+      hasPassword: Boolean(user?.password),
       oauthProviders: Array.isArray(user?.providers) ? user.providers.map((p) => p.type) : [],
     });
   } catch (e) {
@@ -121,7 +181,6 @@ router.get("/security", requireAuth, async (req, res, next) => {
 router.patch("/security", requireAuth, async (req, res, next) => {
   try {
     const { mfaEnabled } = req.body || {};
-    // Aquí podrías persistir la preferencia en DB en el futuro
     return res.json({ mfaEnabled: !!mfaEnabled });
   } catch (e) {
     next(e);
@@ -142,7 +201,6 @@ router.get("/privacy", requireAuth, async (_req, res) => {
  */
 router.patch("/consents", requireAuth, async (req, res) => {
   const { marketing } = req.body || {};
-  // persistir en DB si quieres
   res.json({ consents: { marketing: !!marketing } });
 });
 

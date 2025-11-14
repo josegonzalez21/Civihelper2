@@ -11,6 +11,7 @@ import { headObjectInfo } from "./s3.js";
 const REGION   = process.env.AWS_REGION || "";
 const BUCKET   = process.env.S3_BUCKET || "";
 const CDN_BASE = (process.env.CDN_BASE_URL || "").replace(/\/+$/, "");
+
 export const s3 = REGION ? new S3Client({ region: REGION }) : null;
 
 /** Construye URL pública a partir de una key S3 ("uploads/..."). */
@@ -76,8 +77,22 @@ export async function deleteFromUploads(key) {
  * Lanza Error con .code = "INVALID_MIME" | "TOO_LARGE" en caso de fallo.
  */
 export async function assertImageObject({ key, maxBytes = 8 * 1024 * 1024 }) {
-  const clean = String(key || "").replace(/^\/+/, "");
-  const h = await headObjectInfo(clean);
+  const cleanKey = String(key || "").replace(/^\/+/, "");
+  if (!cleanKey) {
+    const err = new Error("Key S3 inválida o vacía");
+    err.code = "INVALID_KEY";
+    throw err;
+  }
+
+  let h;
+  try {
+    h = await headObjectInfo(cleanKey);
+  } catch (e) {
+    const err = new Error("No se pudo obtener metadatos del objeto en S3");
+    err.code = "HEAD_FAILED";
+    err.details = e;
+    throw err;
+  }
 
   const ct = String(h.contentType || "").toLowerCase();
   if (!ct.startsWith("image/")) {
@@ -86,12 +101,15 @@ export async function assertImageObject({ key, maxBytes = 8 * 1024 * 1024 }) {
     err.details = h;
     throw err;
   }
-  if (Number(h.contentLength || 0) > maxBytes) {
-    const err = new Error(`Imagen demasiado grande (${h.contentLength} B > ${maxBytes} B)`);
+
+  const size = Number(h.contentLength || 0);
+  if (size > maxBytes) {
+    const err = new Error(`Imagen demasiado grande (${size} B > ${maxBytes} B)`);
     err.code = "TOO_LARGE";
     err.details = h;
     throw err;
   }
+
   return h;
 }
 
@@ -112,7 +130,7 @@ export const upload = {
 };
 
 // Si aún hay algún flujo que intente guardar buffers locales,
-// puedes lanzar un error para detectarlo en desarrollo.
+// devolvemos estructura vacía para no romper al consumidor.
 export async function saveBufferWithThumb() {
   return { key: null, thumbKey: null, url: null, thumbUrl: null, path: null, thumbPath: null };
 }

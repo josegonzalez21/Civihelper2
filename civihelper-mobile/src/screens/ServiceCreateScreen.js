@@ -1,156 +1,226 @@
 // src/screens/ServiceCreateScreen.js
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
-  SafeAreaView, View, Text, StyleSheet, TextInput, Alert, TouchableOpacity,
-  ScrollView, Modal, ActivityIndicator, FlatList, Platform, Pressable,
-  KeyboardAvoidingView, Linking, Image,
+  SafeAreaView,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Platform,
+  Alert,
+  Image,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import { useAuth } from "../context/AuthContext";
+import Input from "../components/common/Input";
+import PickerField from "../components/common/PickerField";
+import AppLogo from "../components/common/AppLogo";
 import * as ImagePicker from "expo-image-picker";
-import PrimaryButton from "../components/common/PrimaryButton";
-import { API_URL, getAuthToken } from "../services/api";
+import {
+  API_BASE,
+  API_URL,
+  getAuthToken,
+  request,
+  s3UploadAndGetKey,
+  uploadsSignGet,
+} from "../services/api";
 
-// ✅ Tema unificado (mismo del login / detalle)
-import Colors, { spacing, radius, shadows } from "../theme/color";
+// 🎨 Paleta estilo Páginas Amarillas
+const Colors = {
+  primary: "#FFD100",
+  primaryDark: "#F5C400",
+  primaryLight: "#0F172A",
+  purple: "#7C3AED",
+  success: "#10B981",
+  text: "#0F172A",
+  subtext: "#030303ff",
+  border: "#E5E7EB",
+  card: "#FFFFFF",
+  bg: "#FAFAFA",
+};
 
-const LOGIN_GRADIENT = Colors?.gradients?.login || ["#7C3AED", "#A855F7"];
-const GLASS_BG     = Colors.withOpacity(Colors.palette.white, 0.05);
-const GLASS_BORDER = Colors.withOpacity(Colors.palette.white, 0.10);
+const makeShadow = () =>
+  Platform.OS === "android"
+    ? { elevation: 3 }
+    : {
+        shadowColor: "#000",
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+      };
 
-/* ---------- Permisos: galería con alerta guiada ---------- */
-async function ensureGalleryPermission() {
-  const { status, granted, canAskAgain } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (granted || status === "granted") return true;
+const isDigits = (v) => /^[0-9]+$/.test(String(v));
+const toId = (v) => (isDigits(v) ? Number(v) : String(v));
 
-  return new Promise((resolve) => {
-    Alert.alert(
-      "Permiso requerido",
-      "Necesitamos acceso a tu galería para seleccionar una imagen del servicio.",
-      [
-        { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
-        {
-          text: canAskAgain ? "Intentar de nuevo" : "Abrir ajustes",
-          onPress: async () => {
-            if (canAskAgain) {
-              const again = await ImagePicker.requestMediaLibraryPermissionsAsync();
-              resolve(again.granted === true || again.status === "granted");
-            } else {
-              try { await Linking.openSettings(); } catch {}
-              resolve(false);
-            }
-          },
-        },
-      ],
-    );
-  });
-}
-
-export default function ServiceCreateScreen({ navigation }) {
-  const [cats, setCats] = useState([]);
-  const [catsLoading, setCatsLoading] = useState(false);
-  const [catsError, setCatsError] = useState("");
-  const [catsOpen, setCatsOpen] = useState(false);
+export default function ServiceCreateScreen() {
+  const navigation = useNavigation();
+  const { user } = useAuth();
 
   const [title, setTitle] = useState("");
-  const [categoryId, setCategoryId] = useState(null);
-  const [city, setCity] = useState("");
-  const [priceFrom, setPriceFrom] = useState("");
   const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [categoryId, setCategoryId] = useState("");
+  const [priceFrom, setPriceFrom] = useState("");
+  const [priceTo, setPriceTo] = useState("");
+  const [city, setCity] = useState("");
+  const [coverUrl, setCoverUrl] = useState("");
 
-  const [image, setImage] = useState(null); // { uri, name, type }
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingCategories, setLoadingCategories] = useState(true);
+  const [tempCoverKey, setTempCoverKey] = useState(null);
+  const [coverPreview, setCoverPreview] = useState(null);
 
-  const valid = useMemo(() => {
-    const vTitle = title.trim().length >= 3;
-    const vDesc  = description.trim().length >= 20;
-    const vCat   = !!categoryId;
-    const vPrice = priceFrom === "" || (!isNaN(Number(priceFrom)) && Number(priceFrom) >= 0);
-    return vTitle && vDesc && vCat && vPrice;
-  }, [title, description, categoryId, priceFrom]);
-
-  const loadCats = useCallback(async () => {
-    try {
-      setCatsLoading(true);
-      setCatsError("");
-      const token = getAuthToken?.() || null;
-      const res = await fetch(`${API_URL}/categories`, {
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || "No se pudieron cargar categorías");
-      setCats(Array.isArray(data) ? data : data?.items || []);
-    } catch (e) {
-      setCats([]);
-      setCatsError(e?.message || "No se pudieron cargar categorías");
-    } finally {
-      setCatsLoading(false);
-    }
+  useEffect(() => {
+    loadCategories();
   }, []);
 
-  useEffect(() => { loadCats(); }, [loadCats]);
+  // 🧠 Debug inicial: conexión con backend y firma S3
+  useEffect(() => {
+    (async () => {
+      try {
+        console.log("[ENV] API_BASE:", API_BASE);
+        console.log("[ENV] API_URL :", API_URL);
+        console.log("[ENV] TOKEN?  :", getAuthToken());
 
-  const openCatsModal = () => {
-    if ((!cats || cats.length === 0) && !catsLoading) loadCats();
-    setCatsOpen(true);
+        try {
+          const r = await fetch(`${API_BASE}/healthz`);
+          const t = await r.text();
+          console.log("[HEALTHZ]", r.status, t);
+        } catch (e) {
+          console.log("[HEALTHZ ERROR]", e);
+        }
+
+        try {
+          const data = await request("/uploads/sign", {
+            method: "POST",
+            body: { kind: "temp", mime: "image/png" },
+            tag: "S3_SIGN_PUT",
+          });
+          console.log("[SIGN OK]", data);
+        } catch (e) {
+          console.log("[SIGN ERROR]", e?.status, e?.message, e?.data?.snippet);
+        }
+      } catch (e) {
+        console.log("[DEBUG BOOT ERROR]", e);
+      }
+    })();
+  }, []);
+
+  // 📦 Cargar categorías
+  const loadCategories = async () => {
+    try {
+      setLoadingCategories(true);
+      const data = await request("/categories", {
+        method: "GET",
+        query: { limit: 100 },
+        tag: "CATEGORIES",
+      });
+
+      const raw = Array.isArray(data)
+        ? data
+        : data?.items || data?.data || data?.results || data?.categories || [];
+
+      const normalized = (raw || [])
+        .map((c) => {
+          const id = c?.id ?? c?._id ?? c?.uuid ?? c?.value ?? null;
+          const name = c?.name ?? c?.title ?? c?.label ?? "";
+          return id ? { id, name: String(name || "").trim() } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.name.localeCompare(b.name, "es"));
+
+      setCategories(normalized);
+    } catch (err) {
+      console.error("Error cargando categorías:", err);
+      Alert.alert(
+        "Categorías",
+        "No se pudieron cargar las categorías.\n" + (err?.message || "")
+      );
+      setCategories([]);
+    } finally {
+      setLoadingCategories(false);
+    }
   };
-  const closeCatsModal = () => setCatsOpen(false);
 
-  const chooseCat = (id) => {
-    setCategoryId(id);
-    closeCatsModal();
-  };
+  // 📸 Subir imagen a S3
+ async function pickAndUploadCover() {
+  try {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm?.status !== "granted") {
+      Alert.alert("Permiso requerido", "Necesitas dar permiso a tu galería.");
+      return;
+    }
 
-  /* ---------- Seleccionar imagen ---------- */
-  const pickImage = async () => {
-    const allowed = await ensureGalleryPermission();
-    if (!allowed) return;
+    const mediaTypesCompat =
+      (ImagePicker?.MediaType && ImagePicker.MediaType.Images) ||
+       ImagePicker?.MediaTypeOptions?.Images ||  undefined; // último recurso
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions?.Images ?? ImagePicker.MediaType?.IMAGE,
-      allowsEditing: true,
-      quality: 0.85,
-      exif: false,
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: mediaTypesCompat,   // ← usa el que exista en tu versión
+      quality: 0.9,
+      selectionLimit: 1,              // lo ignoran versiones viejas; no pasa nada
     });
-    if (result.canceled) return;
 
-    const asset = result.assets?.[0];
-    if (!asset?.uri) return;
+    if (r.canceled) return;
 
-    const fileName =
-      asset.fileName ||
-      `service_${Date.now()}.${(asset.uri.split(".").pop() || "jpg").toLowerCase()}`;
+    const a = r.assets?.[0];
     const mime =
-      asset.mimeType ||
-      (fileName.endsWith(".png")
+      a?.mimeType ||
+      (String(a?.uri || "").toLowerCase().endsWith(".png")
         ? "image/png"
-        : fileName.endsWith(".webp")
-        ? "image/webp"
         : "image/jpeg");
 
-    setImage({ uri: asset.uri, name: fileName, type: mime });
-  };
+    // 1) Subir a S3 como "temp"
+    const { key } = await s3UploadAndGetKey({
+      kind: "temp",
+      ids: {},
+      mime,
+      file: { uri: a.uri, name: a.fileName || "cover", type: mime },
+    });
 
-  const removeImage = () => setImage(null);
+    setTempCoverKey?.(key);
+    setCoverUrl?.(key);
 
-  /* ---------- Submit ---------- */
-  const submit = async () => {
-    if (!valid || saving) return;
+    // 2) URL temporal para previsualizar
+    const signed = await uploadsSignGet({ key });
+    setCoverPreview?.(signed?.url || null);
+
+  } catch (e) {
+    console.error("[pickAndUploadCover]", e);
+    Alert.alert("Subida S3", e?.message || "No se pudo subir la imagen");
+  }
+}
+
+
+  const canSubmit = useMemo(() => {
+    return title.trim() && description.trim() && String(categoryId).length > 0;
+  }, [title, description, categoryId]);
+
+  // 🚀 Crear servicio
+  const handleCreate = async () => {
+    if (!canSubmit) {
+      Alert.alert("Error", "Por favor completa todos los campos obligatorios");
+      return;
+    }
+
     try {
-      setSaving(true);
+      setLoading(true);
+      const token = getAuthToken?.();
+
       const body = {
         title: title.trim(),
         description: description.trim(),
-        categoryId,
+        categoryId: toId(categoryId),
+        priceFrom: priceFrom ? Number(priceFrom) : null,
+        priceTo: priceTo ? Number(priceTo) : null,
         city: city.trim() || null,
-        priceFrom: priceFrom === "" ? null : Number(priceFrom),
+        coverKey: coverUrl || null, // se envía la key de S3
       };
-      const token = getAuthToken?.() || null;
 
-      // 1) Crear servicio
       const res = await fetch(`${API_URL}/services`, {
         method: "POST",
         headers: {
@@ -159,448 +229,245 @@ export default function ServiceCreateScreen({ navigation }) {
         },
         body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({}));
+
+      const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo crear el servicio");
 
-      const newId = data?.id;
-      if (!newId) {
-        Alert.alert("Atención", "Servicio creado, pero no se recibió un ID.");
-        navigation.replace("ServiceDetail", { id: data?.id });
-        return;
-      }
-
-      // 2) Subir imagen (si existe) con varios endpoints comunes
-      if (image?.uri) {
-        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-
-        const postForm = async (url, fieldName) => {
-          const fd = new FormData();
-          fd.append(fieldName, { uri: image.uri, name: image.name, type: image.type });
-          const r = await fetch(url, { method: "POST", headers: { ...authHeaders }, body: fd });
-          const j = await r.json().catch(() => ({}));
-          return { ok: r.ok, status: r.status, data: j };
-        };
-
-        let ok = false;
-        let uploadedUrl = null;
-
-        // a) /api/services/:id/image  (field: image)
-        const r1 = await postForm(`${API_URL}/services/${newId}/image`, "image");
-        if (r1.ok) ok = true;
-
-        // b) /api/services/:id/cover (field: image)
-        if (!ok && r1.status === 404) {
-          const r2 = await postForm(`${API_URL}/services/${newId}/cover`, "image");
-          if (r2.ok) ok = true;
-        }
-
-        // c) /api/uploads (field: file) + PUT coverUrl
-        if (!ok) {
-          const r3 = await postForm(`${API_URL}/uploads`, "file");
-          if (r3.ok) {
-            uploadedUrl = r3.data?.url || r3.data?.path || r3.data?.location || null;
-            ok = true;
-            if (uploadedUrl) {
-              await fetch(`${API_URL}/services/${newId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json", ...authHeaders },
-                body: JSON.stringify({ coverUrl: uploadedUrl }),
-              }).catch(() => {});
-            }
-          }
-        }
-
-        // d) /api/upload
-        if (!ok) {
-          const r4 = await postForm(`${API_URL}/upload`, "file");
-          if (r4.ok) {
-            uploadedUrl = r4.data?.url || r4.data?.path || r4.data?.location || null;
-            ok = true;
-            if (uploadedUrl) {
-              await fetch(`${API_URL}/services/${newId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json", ...authHeaders },
-                body: JSON.stringify({ coverUrl: uploadedUrl }),
-              }).catch(() => {});
-            }
-          }
-        }
-
-        if (!ok) {
-          console.warn("⚠️ No se pudo subir imagen. Revisa endpoints de carga en el backend.");
-        }
-      }
-
-      Alert.alert("Listo", "Servicio creado con éxito");
-      navigation.replace("ServiceDetail", { id: newId });
-    } catch (e) {
-      Alert.alert("Error", e?.message || "No se pudo crear el servicio");
+      Alert.alert("¡Éxito!", "Servicio creado correctamente", [
+        { text: "OK", onPress: () => navigation.goBack() },
+      ]);
+    } catch (err) {
+      Alert.alert("Error", err.message || "No se pudo crear el servicio");
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const renderCatItem = ({ item }) => {
-    const active = item.id === categoryId;
-    return (
-      <TouchableOpacity
-        style={[styles.catItem, active && styles.catItemActive]}
-        onPress={() => chooseCat(item.id)}
-        accessibilityRole="button"
-      >
-        <Text style={[styles.catItemText, active && styles.catItemTextActive]}>{item.name}</Text>
-        {active ? <Feather name="check" size={18} color={Colors.primary} /> : null}
-      </TouchableOpacity>
-    );
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("MyServices");
   };
 
+  // 🖼️ Render
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.bg }}>
-      {/* Header con gradiente violeta, coherente con Login */}
-      <LinearGradient colors={LOGIN_GRADIENT} style={styles.hero} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-        <TouchableOpacity onPress={() => navigation.goBack?.()} accessibilityLabel="Volver" style={styles.backBtn}>
-          <Feather name="chevron-left" size={22} color="#fff" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Crear servicio</Text>
-        <Text style={styles.sub}>Describe tu servicio para que te encuentren</Text>
+      <LinearGradient
+        colors={[Colors.primary, Colors.primaryDark]}
+        style={styles.header}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+      >
+        <View style={styles.headerTop}>
+          <TouchableOpacity
+            onPress={goBack}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Volver"
+          >
+            <Feather name="arrow-left" size={20} color={Colors.text} />
+          </TouchableOpacity>
+
+          <AppLogo source={require("../assets/Logo3.png")} size={32} rounded />
+
+          <View style={{ width: 36 }} />
+        </View>
+
+        <Text style={styles.title}>Crear Servicio</Text>
+        <Text style={styles.subtitle}>Completa la información de tu servicio</Text>
       </LinearGradient>
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView
-          contentContainerStyle={{ padding: spacing(2), gap: spacing(1.5), paddingBottom: spacing(3) }}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.card}>
-            {/* Título */}
-            <Text style={styles.label}>Título</Text>
-            <View style={[styles.inputWrap, title.length > 0 && title.trim().length < 3 && styles.inputError]}>
-              <Feather name="type" size={18} color={Colors.sub} style={styles.inputIcon} />
-              <TextInput
-                style={styles.inputField}
-                value={title}
-                onChangeText={setTitle}
-                placeholder="Ej: Plomería a domicilio"
-                placeholderTextColor={Colors.withOpacity(Colors.text, 0.45)}
-                returnKeyType="next"
-              />
-            </View>
-            {title.length > 0 && title.trim().length < 3 && <Text style={styles.err}>Mínimo 3 caracteres.</Text>}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Información básica */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Información básica</Text>
 
-            {/* Categoría */}
-            <Text style={[styles.label, { marginTop: spacing(1.5) }]}>Categoría</Text>
-            <TouchableOpacity style={styles.selectWrap} onPress={openCatsModal}>
-              <Feather name="grid" size={18} color={Colors.sub} style={styles.inputIcon} />
-              <Text style={[styles.selectText, { color: categoryId ? Colors.text : Colors.withOpacity(Colors.text, 0.45) }]}>
-                {categoryId ? cats.find((c) => c.id === categoryId)?.name || "Seleccionada" : "Selecciona una categoría"}
-              </Text>
-              <Feather name="chevron-down" size={18} color={Colors.withOpacity(Colors.text, 0.45)} />
-            </TouchableOpacity>
-            {!categoryId && <Text style={styles.hint}>Requerido para publicar.</Text>}
+          <Input
+            label="Título del servicio *"
+            placeholder="Ej: Plomería profesional"
+            value={title}
+            onChangeText={setTitle}
+            maxLength={100}
+          />
 
-            {/* Ciudad */}
-            <Text style={[styles.label, { marginTop: spacing(1.5) }]}>Ciudad (opcional)</Text>
-            <View style={styles.inputWrap}>
-              <Feather name="map-pin" size={18} color={Colors.sub} style={styles.inputIcon} />
-              <TextInput
-                style={styles.inputField}
-                value={city}
-                onChangeText={setCity}
-                placeholder="Ej: Santiago"
-                placeholderTextColor={Colors.withOpacity(Colors.text, 0.45)}
-                returnKeyType="next"
-              />
-            </View>
+          <Input
+            label="Descripción *"
+            placeholder="Describe tu servicio..."
+            value={description}
+            onChangeText={setDescription}
+            multiline
+            numberOfLines={4}
+            maxLength={500}
+          />
 
-            {/* Precio */}
-            <Text style={[styles.label, { marginTop: spacing(1.5) }]}>Precio desde (opcional)</Text>
-            <View
-              style={[
-                styles.inputWrap,
-                priceFrom !== "" && (isNaN(Number(priceFrom)) || Number(priceFrom) < 0) && styles.inputError,
-              ]}
-            >
-              <Feather name="dollar-sign" size={18} color={Colors.sub} style={styles.inputIcon} />
-              <TextInput
-                style={styles.inputField}
+          <PickerField
+            label="Categoría *"
+            value={categoryId}
+            onValueChange={setCategoryId}
+            items={categories.map((c) => ({
+              label: c.name,
+              value: String(c.id),
+            }))}
+            loading={loadingCategories}
+          />
+
+          <Input
+            label="Ciudad"
+            placeholder="Ej: Santiago"
+            value={city}
+            onChangeText={setCity}
+            maxLength={50}
+          />
+        </View>
+
+        {/* Precio */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Precio</Text>
+
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Input
+                label="Desde"
+                placeholder="0"
                 value={priceFrom}
                 onChangeText={setPriceFrom}
-                placeholder="Ej: 25000"
-                placeholderTextColor={Colors.withOpacity(Colors.text, 0.45)}
-                keyboardType={Platform.OS === "ios" ? "number-pad" : "numeric"}
-                inputMode="numeric"
+                keyboardType="numeric"
               />
             </View>
-            {priceFrom !== "" && (isNaN(Number(priceFrom)) || Number(priceFrom) < 0) && (
-              <Text style={styles.err}>Debe ser número mayor o igual a 0.</Text>
-            )}
 
-            {/* Descripción */}
-            <Text style={[styles.label, { marginTop: spacing(1.5) }]}>Descripción</Text>
-            <View
-              style={[
-                styles.textareaWrap,
-                description.length > 0 && description.trim().length < 20 && styles.inputError,
-              ]}
-            >
-              <Feather name="file-text" size={18} color={Colors.sub} style={styles.inputIcon} />
-              <TextInput
-                style={[styles.inputField, { height: 120, textAlignVertical: "top" }]}
-                value={description}
-                onChangeText={setDescription}
-                placeholder="Describe tu servicio, experiencia, herramientas, etc."
-                placeholderTextColor={Colors.withOpacity(Colors.text, 0.45)}
-                multiline
+            <View style={{ flex: 1 }}>
+              <Input
+                label="Hasta"
+                placeholder="0"
+                value={priceTo}
+                onChangeText={setPriceTo}
+                keyboardType="numeric"
               />
             </View>
-            {description.length > 0 && description.trim().length < 20 && (
-              <Text style={styles.err}>Mínimo 20 caracteres.</Text>
-            )}
-
-            {/* Imagen */}
-            <Text style={[styles.label, { marginTop: spacing(1.5) }]}>Imagen del servicio (opcional)</Text>
-            {image ? (
-              <View style={styles.imagePreviewWrap}>
-                <Image source={{ uri: image.uri }} style={styles.imagePreview} />
-                <View style={{ flexDirection: "row", gap: spacing(1) }}>
-                  <TouchableOpacity onPress={removeImage} style={styles.secondaryBtn}>
-                    <Feather name="trash-2" size={16} color={Colors.danger} />
-                    <Text style={[styles.secondaryBtnText, { color: Colors.danger }]}>Quitar</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={pickImage} style={styles.secondaryBtn}>
-                    <Feather name="image" size={16} color={Colors.primary} />
-                    <Text style={[styles.secondaryBtnText, { color: Colors.primary }]}>Cambiar</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <TouchableOpacity onPress={pickImage} style={styles.pickBtn}>
-                <Feather name="image" size={18} color={Colors.primary} />
-                <Text style={[styles.secondaryBtnText, { color: Colors.primary }]}>Seleccionar imagen</Text>
-              </TouchableOpacity>
-            )}
-
-            <PrimaryButton onPress={submit} disabled={!valid || saving} loading={saving} style={{ marginTop: spacing(2) }}>
-              Publicar
-            </PrimaryButton>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      {/* Modal categorías */}
-      <Modal visible={catsOpen} transparent animationType="fade" onRequestClose={closeCatsModal} statusBarTranslucent>
-        <Pressable style={styles.modalBackdrop} onPress={closeCatsModal} />
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Selecciona categoría</Text>
-            <TouchableOpacity onPress={closeCatsModal} style={styles.closeBtn} accessibilityLabel="Cerrar">
-              <Feather name="x" size={18} color={Colors.sub} />
-            </TouchableOpacity>
           </View>
 
-          {catsLoading ? (
-            <View style={styles.modalCenter}>
-              <ActivityIndicator />
-              <Text style={styles.modalHint}>Cargando…</Text>
-            </View>
-          ) : catsError ? (
-            <View style={styles.modalCenter}>
-              <Text style={[styles.modalHint, { color: Colors.danger }]}>{catsError}</Text>
-              <TouchableOpacity onPress={loadCats} style={styles.retryBtn}>
-                <Text style={styles.retryText}>Reintentar</Text>
-              </TouchableOpacity>
-            </View>
-          ) : cats.length === 0 ? (
-            <View style={styles.modalCenter}>
-              <Text style={styles.modalHint}>No hay categorías disponibles.</Text>
-              <TouchableOpacity onPress={loadCats} style={styles.retryBtn}>
-                <Text style={styles.retryText}>Actualizar</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <FlatList
-              data={cats}
-              keyExtractor={(it) => String(it.id)}
-              renderItem={renderCatItem}
-              contentContainerStyle={{ paddingVertical: spacing(0.75) }}
-              style={{ maxHeight: 360 }}
-              keyboardShouldPersistTaps="handled"
+          <Text style={styles.hint}>Deja en blanco si prefieres "Precio a convenir"</Text>
+        </View>
+
+        {/* Imagen de portada */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Imagen de portada</Text>
+
+          <TouchableOpacity
+            onPress={pickAndUploadCover}
+            style={[styles.btn, { marginBottom: 12 }]}
+          >
+            <Feather name="upload" size={20} color={Colors.text} />
+            <Text style={styles.btnText}>Subir imagen (S3)</Text>
+          </TouchableOpacity>
+
+          {coverPreview ? (
+            <Image
+              source={{ uri: coverPreview }}
+              style={{ width: "100%", height: 180, borderRadius: 12 }}
             />
+          ) : (
+            <Text style={styles.hint}>Aún no seleccionas imagen.</Text>
           )}
         </View>
-      </Modal>
+
+        {/* Botón crear */}
+        <TouchableOpacity
+          onPress={handleCreate}
+          disabled={loading || !canSubmit}
+          style={[styles.btn, (loading || !canSubmit) && { opacity: 0.6 }]}
+        >
+          {loading ? (
+            <ActivityIndicator color={Colors.text} />
+          ) : (
+            <>
+              <Feather name="check" size={20} color={Colors.text} />
+              <Text style={styles.btnText}>Crear Servicio</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  /* Header */
-  hero: {
-    paddingTop: spacing(2),
-    paddingBottom: spacing(2.5),
-    paddingHorizontal: spacing(2),
-    borderBottomLeftRadius: radius(2.75),
-    borderBottomRightRadius: radius(2.75),
-    ...shadows.lg,
+  header: {
+    paddingHorizontal: 16,
+    paddingTop: Platform.select({ ios: 6, android: 10, default: 10 }),
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  headerTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
   },
   backBtn: {
     width: 36,
     height: 36,
-    borderRadius: radius(1.25),
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
+    borderRadius: 12,
+    backgroundColor: Colors.card,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    marginBottom: spacing(1),
+    ...makeShadow(),
   },
-  title: { color: "#fff", fontSize: 20, fontWeight: "800" },
-  sub: { color: "rgba(255,255,255,0.92)", marginTop: spacing(0.75) },
-
-  /* Card glass */
-  card: {
-    backgroundColor: GLASS_BG,
-    borderRadius: radius(2),
-    padding: spacing(1.75),
-    borderWidth: Platform.OS === "web" ? 1 : StyleSheet.hairlineWidth,
-    borderColor: GLASS_BORDER,
-    ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },
-      android: { elevation: 2 },
-      web: { backdropFilter: "blur(12px) saturate(120%)" },
-    }),
-  },
-
-  /* Form */
-  label: { color: Colors.text, fontSize: 13, marginBottom: spacing(0.75), fontWeight: "700" },
-
-  inputWrap: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: radius(1.5),
-    paddingHorizontal: spacing(1.25),
-    backgroundColor: Colors.card,
-    alignItems: "center",
-    flexDirection: "row",
-  },
-  textareaWrap: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: radius(1.5),
-    paddingHorizontal: spacing(1.25),
-    paddingTop: spacing(1),
-    backgroundColor: Colors.card,
-    alignItems: "flex-start",
-    flexDirection: "row",
-  },
-  inputIcon: { marginRight: spacing(1) },
-  inputField: {
-    flex: 1,
+  title: {
+    fontSize: 24,
+    fontWeight: "800",
     color: Colors.text,
-    paddingVertical: Platform.OS === "ios" ? spacing(1.25) : spacing(0.75),
+    marginBottom: 4,
   },
-  inputError: { borderColor: Colors.danger },
-
-  selectWrap: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: radius(1.5),
-    paddingHorizontal: spacing(1.25),
+  subtitle: {
+    fontSize: 14,
+    color: Colors.text,
+    opacity: 0.7,
+  },
+  content: {
+    padding: 16,
+    gap: 16,
+    paddingBottom: 40,
+  },
+  card: {
     backgroundColor: Colors.card,
-    alignItems: "center",
+    borderRadius: 16,
+    padding: 16,
+    gap: 16,
+    ...makeShadow(),
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  row: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 12,
   },
-  selectText: { flex: 1, marginLeft: spacing(1) },
-
-  hint: { color: Colors.sub, fontSize: 12, marginTop: spacing(0.5) },
-  err: { color: Colors.danger, marginTop: spacing(0.75), fontSize: 12 },
-
-  imagePreviewWrap: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: radius(1.5),
-    padding: spacing(1),
-    backgroundColor: Colors.card,
-    ...shadows.sm,
+  hint: {
+    fontSize: 12,
+    color: Colors.subtext,
+    fontStyle: "italic",
   },
-  imagePreview: {
-    width: "100%",
-    aspectRatio: 1.6,
-    borderRadius: radius(1),
-    marginBottom: spacing(1),
-  },
-  pickBtn: {
+  btn: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: spacing(0.75),
-    paddingVertical: spacing(0.75),
-  },
-  secondaryBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing(0.5),
-    paddingHorizontal: spacing(1),
-    paddingVertical: Platform.OS === "ios" ? spacing(0.75) : spacing(0.6),
-    borderRadius: radius(1),
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.card,
-  },
-  secondaryBtnText: { fontWeight: "700" },
-
-  /* Modal */
-  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.35)" },
-  modalSheet: {
-    position: "absolute",
-    left: spacing(1.5),
-    right: spacing(1.5),
-    top: "18%",
-    borderRadius: radius(2),
-    backgroundColor: Colors.card,
-    borderWidth: Platform.OS === "web" ? 1 : StyleSheet.hairlineWidth,
-    borderColor: GLASS_BORDER,
-    padding: spacing(1.5),
-    ...shadows.lg,
-  },
-  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing(1) },
-  modalTitle: { fontSize: 16, fontWeight: "800", color: Colors.text },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radius(1),
-    borderWidth: 1,
-    borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.card,
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: 12,
+    ...makeShadow(),
   },
-  modalCenter: { alignItems: "center", paddingVertical: spacing(2), gap: spacing(1) },
-  modalHint: { color: Colors.sub, fontSize: 13 },
-  retryBtn: {
-    paddingHorizontal: spacing(1.25),
-    paddingVertical: Platform.OS === "ios" ? spacing(0.75) : spacing(0.6),
-    borderRadius: radius(1),
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.card,
+  btnText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: Colors.text,
   },
-  retryText: { color: Colors.primary, fontWeight: "800" },
-
-  catItem: {
-    paddingVertical: spacing(1.25),
-    paddingHorizontal: spacing(1),
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-  },
-  catItemActive: {
-    backgroundColor: Colors.withOpacity(Colors.primary, 0.08),
-  },
-  catItemText: { color: Colors.text, fontWeight: "600" },
-  catItemTextActive: { color: Colors.primary },
 });

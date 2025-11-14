@@ -2,13 +2,13 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Feather } from "@expo/vector-icons";
-import Colors from "../theme/color";
+import Colors from "../../theme/color"; // ✅ ruta corregida
 
 // Pantallas
-import ClientHome from "../screens/home/ClientHome";
-import FavoritesScreen from "../screens/FavoritesScreen";
-import MyReviewsScreen from "../screens/MyReviewsScreen";
-import SettingsScreen from "../screens/SettingsScreen";
+import ClientHome from "../../screens/client/ClientHome";
+import FavoritesScreen from "../../screens/FavoritesScreen";
+import MyReviewsScreen from "../../screens/MyReviewsScreen";
+import SettingsScreen from "../../screens/SettingsScreen";
 
 const Tab = createBottomTabNavigator();
 
@@ -16,7 +16,7 @@ export default function ClientTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
-        headerShown: false,         // 👈 oculta “Inicio”
+        headerShown: false,        // oculta header de cada tab
         tabBarShowLabel: true,
         tabBarActiveTintColor: Colors.primary,
         tabBarInactiveTintColor: Colors.sub,
@@ -30,7 +30,7 @@ export default function ClientTabs() {
         name="ClientHome"
         component={ClientHome}
         options={{
-          title: "Inicio",          // (solo etiqueta del tab; no header)
+          title: "Inicio",
           tabBarIcon: ({ color, size }) => (
             <Feather name="home" color={color} size={size} />
           ),

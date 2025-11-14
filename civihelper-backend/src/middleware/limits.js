@@ -1,45 +1,56 @@
 // src/middleware/limits.js
 import rateLimit from "express-rate-limit";
 
-function jsonHandler(req, res /*, next*/) {
+/**
+ * Handler estándar para respuestas JSON de rate-limit
+ */
+function json429Handler(req, res /*, next*/) {
   return res.status(429).json({
     ok: false,
     message: "Demasiadas solicitudes, intenta nuevamente más tarde.",
+    retryAfterSeconds: Math.ceil(
+      (req?.rateLimit?.resetTime
+        ? new Date(req.rateLimit.resetTime).getTime() - Date.now()
+        : 60_000) / 1000
+    ),
   });
 }
 
-/** Límite general (API completa) */
-export const generalLimiter = rateLimit({
+/**
+ * Helper para crear un limiter con valores por defecto y soporte ENV
+ */
+function createSimpleLimiter({ windowMs, max, message, keyGenerator } = {}) {
+  return rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: json429Handler,
+    keyGenerator,
+    message: message || undefined,
+  });
+}
+
+/** Límite general para toda la API */
+export const generalLimiter = createSimpleLimiter({
   windowMs: 15 * 60 * 1000, // 15 min
-  max: 1000,                // por IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: jsonHandler,
+  max: Number(process.env.GENERAL_LIMIT || 1000), // límite ajustable por ENV
 });
 
-/** Límite para firmar subidas (estricto) */
-export const uploadSignLimiter = rateLimit({
+/** Límite estricto para firmar subidas */
+export const uploadSignLimiter = createSimpleLimiter({
   windowMs: 10 * 60 * 1000, // 10 min
-  max: 60,                  // 60 firmas / 10 min / IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: jsonHandler,
+  max: Number(process.env.UPLOAD_SIGN_LIMIT || 60),
 });
 
-/** Límite para firmar lecturas (más laxo) */
-export const uploadGetLimiter = rateLimit({
+/** Límite laxo para firmar lecturas (GET presignadas) */
+export const uploadGetLimiter = createSimpleLimiter({
   windowMs: 10 * 60 * 1000, // 10 min
-  max: 300,                 // 300 firmas GET / 10 min / IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: jsonHandler,
+  max: Number(process.env.UPLOAD_GET_LIMIT || 300),
 });
 
-/** (Opcional) Límite de login/register si quieres endurecer auth */
-export const authLimiter = rateLimit({
+/** Límite para login/register */
+export const authLimiter = createSimpleLimiter({
   windowMs: 5 * 60 * 1000, // 5 min
-  max: 30,                 // 30 intentos / 5 min
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: jsonHandler,
+  max: Number(process.env.AUTH_LIMIT || 30),
 });

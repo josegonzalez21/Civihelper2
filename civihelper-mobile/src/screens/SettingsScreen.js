@@ -225,23 +225,20 @@ export default function SettingsScreen({ navigation }) {
         colors={UI.gradientBG}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-        pointerEvents="none"
+        style={[StyleSheet.absoluteFillObject, { pointerEvents: "none" }]}
       />
       {/* Blobs */}
       <LinearGradient
         colors={UI.blob1}
-        style={[styles.blob, { top: -80, left: -60 }]}
+        style={[styles.blob, { top: -80, left: -60, pointerEvents: "none" }]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        pointerEvents="none"
       />
       <LinearGradient
         colors={UI.blob2}
-        style={[styles.blob, { bottom: -90, right: -70, transform: [{ scale: 1.2 }] }]}
+        style={[styles.blob, { bottom: -90, right: -70, transform: [{ scale: 1.2 }], pointerEvents: "none" }]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        pointerEvents="none"
       />
 
       {/* Header */}

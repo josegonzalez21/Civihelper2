@@ -13,19 +13,42 @@ const Colors = {
 export default function EmptyState({
   title = "Sin resultados",
   subtitle = "Intenta cambiar los filtros o realizar otra búsqueda.",
-  icon = <Feather name="inbox" size={28} color={Colors.subtext} />,
+  icon,
   actionLabel,
   onAction,
   style,
 }) {
+  const isValidElement = React.isValidElement(icon);
+  const iconNode = isValidElement ? (
+    icon
+  ) : (
+    <Feather name="inbox" size={28} color={Colors.subtext} />
+  );
+
   return (
-    <View style={[styles.wrap, style]} accessibilityRole="text">
-      <View style={styles.iconBox}>{icon}</View>
-      <Text style={styles.title}>{title}</Text>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    <View style={[styles.wrap, style]}>
+      <View style={styles.iconBox}>{iconNode}</View>
+
+      {!!title && (
+        <Text style={styles.title} accessibilityRole="header">
+          {String(title)}
+        </Text>
+      )}
+
+      {!!subtitle && (
+        <Text style={styles.subtitle}>
+          {String(subtitle)}
+        </Text>
+      )}
+
       {actionLabel && onAction ? (
-        <TouchableOpacity onPress={onAction} style={styles.cta} accessibilityRole="button">
-          <Text style={styles.ctaText}>{actionLabel}</Text>
+        <TouchableOpacity
+          onPress={onAction}
+          style={styles.cta}
+          accessibilityRole="button"
+          accessibilityLabel={String(actionLabel)}
+        >
+          <Text style={styles.ctaText}>{String(actionLabel)}</Text>
         </TouchableOpacity>
       ) : null}
     </View>
@@ -33,7 +56,12 @@ export default function EmptyState({
 }
 
 const styles = StyleSheet.create({
-  wrap: { alignItems: "center", justifyContent: "center", paddingVertical: 24, paddingHorizontal: 16 },
+  wrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+  },
   iconBox: {
     width: 56,
     height: 56,
@@ -44,8 +72,27 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 10,
   },
-  title: { fontSize: 16, fontWeight: "800", color: Colors.text, textAlign: "center" },
-  subtitle: { marginTop: 6, color: Colors.subtext, textAlign: "center" },
-  cta: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.primary },
-  ctaText: { color: Colors.primary, fontWeight: "700" },
+  title: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: Colors.text,
+    textAlign: "center",
+  },
+  subtitle: {
+    marginTop: 6,
+    color: Colors.subtext,
+    textAlign: "center",
+  },
+  cta: {
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  ctaText: {
+    color: Colors.primary,
+    fontWeight: "700",
+  },
 });

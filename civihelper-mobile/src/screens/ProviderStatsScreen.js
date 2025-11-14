@@ -19,9 +19,21 @@ import PrimaryButton from "../components/common/PrimaryButton";
 import EmptyState from "../components/common/EmptyState";
 
 // 🎨 Tema CiviHelper (violeta oscuro + glass)
-import Colors, { spacing, radius, shadows } from "../theme/color";
+import Colors, { spacing, radius } from "../theme/color";
 
 const LOGIN_GRADIENT = Colors?.gradients?.login || ["#7C3AED", "#A855F7"];
+
+/** Sombras modernas sin `shadow*` deprecado */
+const iosShadowMap = {
+  xs: "0px 1px 2px rgba(0,0,0,0.12)",
+  sm: "0px 2px 6px rgba(0,0,0,0.14)",
+  md: "0px 4px 12px rgba(0,0,0,0.16)",
+  lg: "0px 8px 24px rgba(0,0,0,0.18)",
+};
+const makeShadow = (level = "sm") =>
+  Platform.OS === "android"
+    ? { elevation: level === "xs" ? 1 : level === "sm" ? 3 : level === "md" ? 5 : 8 }
+    : { boxShadow: iosShadowMap[level] || iosShadowMap.sm };
 
 export default function ProviderStatsScreen({ navigation }) {
   const { user } = useAuth();
@@ -451,7 +463,7 @@ const s = StyleSheet.create({
     paddingBottom: spacing(2),
     borderBottomLeftRadius: radius(2.5),
     borderBottomRightRadius: radius(2.5),
-    ...shadows.lg,
+    ...makeShadow("lg"),
   },
   heroTop: {
     flexDirection: "row",
@@ -479,7 +491,7 @@ const s = StyleSheet.create({
     padding: spacing(1.75),
     borderWidth: 1,
     borderColor: Colors.border,
-    ...shadows.md,
+    ...makeShadow("md"),
   },
 
   // KPIs
@@ -492,7 +504,7 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     alignItems: "center",
-    ...shadows.xs,
+    ...makeShadow("xs"),
   },
   kpiLabel: { color: Colors.sub, fontWeight: "700" },
   kpiValue: { color: Colors.text, fontWeight: "900", fontSize: 18, marginTop: 4 },

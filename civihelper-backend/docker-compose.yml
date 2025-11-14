@@ -1,15 +1,39 @@
-version: "3.9"
 services:
   db:
     image: postgres:16
-    restart: unless-stopped
+    container_name: civihelper-db
     environment:
+      POSTGRES_DB: civihelper
       POSTGRES_USER: civi
       POSTGRES_PASSWORD: civi
-      POSTGRES_DB: civihelper
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U civi -d civihelper"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: civihelper-api
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/node_modules
+    env_file:
+      - .env
+    environment:
+      - IS_DOCKER=true  # 👈 AGREGA ESTA LÍNEA
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    command: sh -c "npx prisma generate && npm run dev"
+
 volumes:
   pgdata:

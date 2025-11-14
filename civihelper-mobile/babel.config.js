@@ -1,19 +1,20 @@
+// babel.config.js
 module.exports = function (api) {
   api.cache(true)
   return {
     presets: ['babel-preset-expo'],
     plugins: [
-      [
-        '@tamagui/babel-plugin',
-        {
-          components: ['tamagui'],
-          config: './tamagui.config.ts',
-          logTimings: true,
-          disableExtraction: process.env.NODE_ENV === 'development',
-        },
-      ],
+      // Si usas alias "@/src", descomenta esto:
+      // [
+      //   'module-resolver',
+      //   {
+      //     root: ['./'],
+      //     alias: { '@': './', '@/src': './src' },
+      //     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
+      //   },
+      // ],
 
-      // NOTE: this is only necessary if you are using reanimated for animations
+      // 👇 SIEMPRE al final
       'react-native-reanimated/plugin',
     ],
   }

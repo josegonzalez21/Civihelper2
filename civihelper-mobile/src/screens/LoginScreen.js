@@ -1,6 +1,6 @@
 // src/screens/LoginScreen.js
 /* eslint-disable no-console */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -15,24 +15,43 @@ import {
   ScrollView,
   useWindowDimensions,
   TextInput,
+  Animated,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import * as SecureStore from "expo-secure-store";
 import { FontAwesome } from "@expo/vector-icons";
 
 import useCountdown from "../components/hooks/useCountdown";
 import { useAuth } from "../context/AuthContext";
 import { validateEmail, runValidationTestsOnce } from "../utils/validation";
 import { signInWithGoogle, signInWithFacebook, signInWithApple } from "../services/social";
-import { API_URL, setAuthToken, API_BASE, login } from "../services/api";
+import { API_URL, setAuthToken, login } from "../services/api";
 
 /* =========================
-   Utilidades de red/errores
+   CONSTANTES
+========================= */
+const RATE_LIMIT = {
+  MAX_ATTEMPTS: 5,
+  LOCKOUT_DURATION: 30000,
+  MIN_WAIT: 5000,
+  MAX_WAIT: 300000,
+  RESET_AFTER_INACTIVITY: 300000,
+};
+
+const PASSWORD_REQUIREMENTS = {
+  MIN_LENGTH: 8,
+};
+
+const TIMEOUTS = {
+  FETCH: 15000,
+};
+
+/* =========================
+   UTILIDADES
 ========================= */
 function parseRetryAfter(header) {
   if (!header) return null;
   const asInt = parseInt(header, 10);
-  if (!Number.isNaN(asInt)) return asInt * 1000; // segundos → ms
+  if (!Number.isNaN(asInt)) return asInt * 1000;
   const when = Date.parse(header);
   if (!Number.isNaN(when)) {
     const diff = when - Date.now();
@@ -59,7 +78,7 @@ async function parseErrorResponse(res) {
   }
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = TIMEOUTS.FETCH) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -70,8 +89,83 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
-/* -------------------------- Form estable (fuera) -------------------------- */
-function LoginForm({
+/* =========================
+   COMPONENTE: INPUT FIELD
+========================= */
+const InputField = React.memo(function InputField({
+  label,
+  value,
+  onChangeText,
+  onBlur,
+  placeholder,
+  secureTextEntry,
+  autoComplete,
+  textContentType,
+  keyboardType,
+  returnKeyType,
+  onSubmitEditing,
+  disabled,
+  rightElement,
+  icon,
+}) {
+  const [isFocused, setIsFocused] = useState(false);
+
+  return (
+    <View style={styles.inputWrapper}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={[styles.inputContainer, isFocused && styles.inputContainerFocused]}>
+        {icon && (
+          <View style={styles.inputIconContainer}>
+            <FontAwesome name={icon} size={18} color="rgba(255,255,255,0.5)" />
+          </View>
+        )}
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          onBlur={() => {
+            setIsFocused(false);
+            onBlur?.();
+          }}
+          onFocus={() => setIsFocused(true)}
+          placeholder={placeholder}
+          placeholderTextColor="rgba(255,255,255,0.4)"
+          secureTextEntry={secureTextEntry}
+          autoComplete={autoComplete}
+          textContentType={textContentType}
+          keyboardType={keyboardType}
+          returnKeyType={returnKeyType}
+          onSubmitEditing={onSubmitEditing}
+          editable={!disabled}
+          style={[styles.input, icon && styles.inputWithIcon]}
+        />
+        {rightElement}
+      </View>
+    </View>
+  );
+});
+
+/* =========================
+   COMPONENTE: SOCIAL BUTTON
+========================= */
+const SocialButton = React.memo(function SocialButton({ icon, onPress, disabled, label }) {
+  return (
+    <TouchableOpacity
+      style={[styles.socialButton, disabled && styles.socialButtonDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
+      accessibilityLabel={label}
+      accessibilityRole="button"
+    >
+      <FontAwesome name={icon} size={20} color="#fff" />
+    </TouchableOpacity>
+  );
+});
+
+/* =========================
+   COMPONENTE: FORMULARIO
+========================= */
+const LoginForm = React.memo(function LoginForm({
   email,
   setEmail,
   pwd,
@@ -83,334 +177,451 @@ function LoginForm({
   locked,
   lockRunning,
   lockSeconds,
+  attempts,
   onSubmit,
   handleGoogle,
   handleFacebook,
   handleApple,
   navigation,
 }) {
+  const handleEmailBlur = useCallback(() => {
+    setEmail((e) => (e || "").trim().toLowerCase());
+  }, [setEmail]);
+
+  const togglePasswordVisibility = useCallback(() => {
+    setShow((prev) => !prev);
+  }, [setShow]);
+
   return (
-    <View style={styles.card}>
-      <Text style={styles.title}>Bienvenido{"\n"}</Text>
-      <Text style={styles.subtitle}>Ingresa tus credenciales para continuar</Text>
-
-      {/* Email */}
-      <View style={styles.field}>
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          placeholder="tucorreo@ejemplo.com"
-          placeholderTextColor="rgba(255,255,255,0.55)"
-          autoCapitalize="none"
-          autoComplete="email"
-          textContentType="username"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-          onBlur={() => setEmail((e) => (e || "").trim().toLowerCase())}
-          style={styles.inputDark}
-          returnKeyType="next"
-          accessibilityLabel="Correo electrónico"
-        />
+    <View style={styles.formContainer}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.welcomeText}>Bienvenido de nuevo</Text>
+        <Text style={styles.subtitleText}>Inicia sesión para continuar</Text>
       </View>
 
-      {/* Password */}
-      <View style={styles.field}>
-        <Text style={styles.label}>Password</Text>
-        <View style={{ position: "relative" }}>
-          <TextInput
-            placeholder="••••••••"
-            placeholderTextColor="rgba(255,255,255,0.55)"
-            secureTextEntry={!show}
-            autoComplete="password"
-            textContentType="password"
-            value={pwd}
-            onChangeText={setPwd}
-            style={styles.inputDark}
-            returnKeyType="done"
-            onSubmitEditing={onSubmit}
-            accessibilityLabel="Contraseña"
-          />
-          <TouchableOpacity onPress={() => setShow((s) => !s)} style={styles.showBtn} accessibilityRole="button">
-            <Text style={styles.link}>{show ? "Hide" : "Show"}</Text>
+      {/* Email Input */}
+      <InputField
+        label="Correo electrónico"
+        value={email}
+        onChangeText={setEmail}
+        onBlur={handleEmailBlur}
+        placeholder="tu@email.com"
+        autoComplete="email"
+        textContentType="username"
+        keyboardType="email-address"
+        returnKeyType="next"
+        disabled={locked}
+        icon="envelope"
+      />
+
+      {/* Password Input */}
+      <InputField
+        label="Contraseña"
+        value={pwd}
+        onChangeText={setPwd}
+        placeholder="••••••••"
+        secureTextEntry={!show}
+        autoComplete="password"
+        textContentType="password"
+        returnKeyType="done"
+        onSubmitEditing={onSubmit}
+        disabled={locked}
+        icon="lock"
+        rightElement={
+          <TouchableOpacity
+            onPress={togglePasswordVisibility}
+            style={styles.eyeButton}
+            accessibilityRole="button"
+            accessibilityLabel={show ? "Ocultar contraseña" : "Mostrar contraseña"}
+          >
+            <FontAwesome
+              name={show ? "eye-slash" : "eye"}
+              size={18}
+              color="rgba(255,255,255,0.6)"
+            />
           </TouchableOpacity>
-        </View>
-      </View>
+        }
+      />
 
-      {/* CTA */}
+      {/* Attempts Warning */}
+      {attempts > 0 && attempts < RATE_LIMIT.MAX_ATTEMPTS && !locked && (
+        <View style={styles.warningContainer}>
+          <FontAwesome name="exclamation-triangle" size={14} color="#f59e0b" />
+          <Text style={styles.warningText}>
+            Intentos restantes: {RATE_LIMIT.MAX_ATTEMPTS - attempts}
+          </Text>
+        </View>
+      )}
+
+      {/* Forgot Password Link */}
+      <TouchableOpacity
+        onPress={() => navigation.navigate("ForgotPassword")}
+        style={styles.forgotPasswordButton}
+        accessibilityRole="button"
+      >
+        <Text style={styles.forgotPasswordText}>¿Olvidaste tu contraseña?</Text>
+      </TouchableOpacity>
+
+      {/* Login Button */}
       <TouchableOpacity
         disabled={!canSubmit}
         onPress={onSubmit}
-        activeOpacity={0.9}
-        style={[styles.ctaWrapper, !canSubmit && { opacity: 0.6 }]}
+        activeOpacity={0.8}
+        style={[styles.loginButton, !canSubmit && styles.loginButtonDisabled]}
         accessibilityRole="button"
+        accessibilityLabel="Iniciar sesión"
       >
-        <LinearGradient colors={["#7c3aed", "#a855f7"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.ctaGradient}>
+        <LinearGradient
+          colors={["#8b5cf6", "#7c3aed"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.loginButtonGradient}
+        >
           {submitting ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.ctaText}>{locked && lockRunning ? `Bloqueado ${lockSeconds}s` : "Log in"}</Text>
+            <Text style={styles.loginButtonText}>
+              {locked && lockRunning ? `Bloqueado (${lockSeconds}s)` : "Iniciar sesión"}
+            </Text>
           )}
         </LinearGradient>
       </TouchableOpacity>
 
-      <Text style={styles.mutedCenter}>o continúa con</Text>
+      {/* Divider */}
+      <View style={styles.dividerContainer}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>O continúa con</Text>
+        <View style={styles.dividerLine} />
+      </View>
 
-      {/* Social */}
-      <View style={styles.socialRow}>
-        <TouchableOpacity style={styles.socialBtn} onPress={handleGoogle} disabled={locked} accessibilityLabel="Google">
-          <FontAwesome name="google" size={22} color="#fff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.socialBtn} onPress={handleFacebook} disabled={locked} accessibilityLabel="Facebook">
-          <FontAwesome name="facebook" size={22} color="#fff" />
-        </TouchableOpacity>
+      {/* Social Login Buttons */}
+      <View style={styles.socialContainer}>
+        <SocialButton
+          icon="google"
+          onPress={handleGoogle}
+          disabled={locked || submitting}
+          label="Iniciar sesión con Google"
+        />
+        <SocialButton
+          icon="facebook"
+          onPress={handleFacebook}
+          disabled={locked || submitting}
+          label="Iniciar sesión con Facebook"
+        />
         {Platform.OS === "ios" && (
-          <TouchableOpacity style={styles.socialBtn} onPress={handleApple} disabled={locked} accessibilityLabel="Apple">
-            <FontAwesome name="apple" size={24} color="#fff" />
-          </TouchableOpacity>
+          <SocialButton
+            icon="apple"
+            onPress={handleApple}
+            disabled={locked || submitting}
+            label="Iniciar sesión con Apple"
+          />
         )}
       </View>
 
-      <TouchableOpacity onPress={() => navigation.navigate("ForgotPassword")} style={{ marginTop: 14 }}>
-        <Text style={[styles.link, { textAlign: "center", color: "#a5b4fc" }]}>¿Olvidaste tu contraseña?</Text>
-      </TouchableOpacity>
+      {/* Register Link */}
+      <View style={styles.registerContainer}>
+        <Text style={styles.registerText}>¿No tienes una cuenta? </Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate("Register")}
+          accessibilityRole="button"
+        >
+          <Text style={styles.registerLink}>Regístrate</Text>
+        </TouchableOpacity>
+      </View>
 
-      <TouchableOpacity onPress={() => navigation.navigate("Register")} style={{ marginTop: 8 }}>
-        <Text style={[styles.altLink, { color: "#c4b5fd" }]}>¿No tienes cuenta? Crear cuenta</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.notice}>
-        Al continuar aceptas nuestra Política de Privacidad y Términos. Tus credenciales se envían cifradas (HTTPS).
+      {/* Legal Notice */}
+      <Text style={styles.legalText}>
+        Al continuar, aceptas nuestros Términos de Servicio y Política de Privacidad
       </Text>
+
+      {/* Debug Button */}
+      {__DEV__ && (
+        <TouchableOpacity
+          onPress={() => {
+            console.log("[LoginScreen] Estado:", {
+              email,
+              pwd: pwd.length > 0 ? `*** (${pwd.length} chars)` : "(vacío)",
+              validEmail: validateEmail(email),
+              validPwd: pwd.length >= PASSWORD_REQUIREMENTS.MIN_LENGTH,
+              attempts,
+              locked,
+              submitting,
+              canSubmit,
+            });
+          }}
+          style={styles.debugButton}
+        >
+          <Text style={styles.debugText}>🐛 Debug State</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
-}
+});
 
-/* ------------------------------ Pantalla ------------------------------ */
+/* =========================
+   PANTALLA PRINCIPAL
+========================= */
 export default function LoginScreen({ navigation }) {
   useEffect(() => runValidationTestsOnce(), []);
 
-  const { refresh } = useAuth();
+  const { login: authLogin } = useAuth();
+  const { width } = useWindowDimensions();
+
   const [email, setEmail] = useState("");
   const [pwd, setPwd] = useState("");
   const [show, setShow] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [attempts, setAttempts] = useState(0);
-
   const [locked, setLocked] = useState(false);
+
   const { seconds: lockSeconds, reset: resetLock, running: lockRunning } = useCountdown(0, {
     autoStart: false,
-    onFinish: () => setLocked(false),
+    onFinish: () => {
+      console.log("[LoginScreen] Bloqueo finalizado");
+      setLocked(false);
+    },
   });
 
-  const validEmail = validateEmail(email);
-  const validPwd = pwd.length >= 8;
-  const canSubmit = useMemo(() => validEmail && validPwd && !submitting && !locked, [validEmail, validPwd, submitting, locked]);
+  const validEmail = useMemo(() => validateEmail(email), [email]);
+  const validPwd = useMemo(() => pwd.length >= PASSWORD_REQUIREMENTS.MIN_LENGTH, [pwd]);
+  const canSubmit = useMemo(
+    () => validEmail && validPwd && !submitting && !locked,
+    [validEmail, validPwd, submitting, locked]
+  );
 
-  // Logs de diagnóstico
+  const isWeb = Platform.OS === "web";
+  const isNarrow = isWeb && width < 1024;
+
   useEffect(() => {
-    const isProd = !__DEV__;
-    if (isProd && typeof API_BASE === "string" && !API_BASE.startsWith("https://")) {
-      console.warn("En producción, usa siempre HTTPS. API_BASE:", API_BASE);
+    if (!__DEV__) {
+      const apiBase = API_URL || "";
+      if (typeof apiBase === "string" && !apiBase.startsWith("https://")) {
+        console.warn("⚠️ [SEGURIDAD] Usar HTTPS en producción");
+      }
     }
-    console.log("[LoginScreen] montado. Plataforma:", Platform.OS);
   }, []);
 
-  const setSessionToken = async (token) => {
-    try {
-      if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-        localStorage.setItem("civihelper_token", token);
-      } else {
-        await SecureStore.setItemAsync("civihelper_token", token, { keychainService: "civihelper" });
-      }
-      setAuthToken(token); // también lo guardamos en el cliente API en memoria
-    } catch (err) {
-      console.error("[LoginScreen] Error guardando token:", err);
+  useEffect(() => {
+    if (attempts > 0) {
+      const resetTimer = setTimeout(() => {
+        console.log("[LoginScreen] Reset intentos por inactividad");
+        setAttempts(0);
+      }, RATE_LIMIT.RESET_AFTER_INACTIVITY);
+      return () => clearTimeout(resetTimer);
     }
-  };
+  }, [attempts]);
 
-  function applyRateLimitLock(ms) {
-    const wait = Math.max(5_000, Math.min(ms || 60_000, 5 * 60_000));
+  const setSessionToken = useCallback(async (token, userData = null) => {
+    try {
+      await authLogin(token, userData);
+      setAuthToken(token);
+    } catch (err) {
+      console.error("[LoginScreen] Error guardando sesión:", err);
+      throw new Error("No se pudo guardar la sesión");
+    }
+  }, [authLogin]);
+
+  const applyRateLimitLock = useCallback((ms) => {
+    const wait = Math.max(RATE_LIMIT.MIN_WAIT, Math.min(ms || 60000, RATE_LIMIT.MAX_WAIT));
     setLocked(true);
     resetLock(Math.ceil(wait / 1000), true);
-  }
+  }, [resetLock]);
 
-  async function onSubmit() {
+  const onSubmit = useCallback(async () => {
     if (!canSubmit) return;
+
     try {
       setSubmitting(true);
-
-      // Ahora usamos el login del servicio directamente
       const res = await login(email.trim().toLowerCase(), pwd);
 
       if (!res?.token) {
-        throw Object.assign(new Error(res?.message || "Credenciales inválidas"), { status: res?.status });
+        throw Object.assign(
+          new Error(res?.message || "Credenciales inválidas"),
+          { status: res?.status || 401 }
+        );
       }
 
-      // Guardamos token también en almacenamiento seguro
-      await setSessionToken(res.token);
+      await setSessionToken(res.token, res.user || null);
+      setAttempts(0);
+    } catch (error) {
+      console.error("[LoginScreen] Error:", error);
 
-      // Refrescamos perfil/estado global si tu AuthContext lo soporta
-      await refresh?.();
-    } catch (e) {
-      console.error("[LoginScreen] onSubmit error:", e);
-
-      if (e?.status === 429) {
-        const ms = e?.retryAfterSeconds ? e.retryAfterSeconds * 1000 : 60_000;
+      if (error?.status === 429) {
+        const ms = error?.retryAfterSeconds ? error.retryAfterSeconds * 1000 : 60000;
         applyRateLimitLock(ms);
-        Alert.alert("Demasiadas solicitudes", `Intenta nuevamente en ${Math.ceil(ms / 1000)} segundos.`);
+        Alert.alert(
+          "Demasiadas solicitudes",
+          `Intenta en ${Math.ceil(ms / 1000)} segundos`
+        );
         return;
       }
 
-      const next = attempts + 1;
-      setAttempts(next);
-      if (next >= 5) {
-        applyRateLimitLock(30_000);
-        Alert.alert("Demasiados intentos", "Espera 30 segundos antes de reintentar.");
+      const nextAttempts = attempts + 1;
+      setAttempts(nextAttempts);
+
+      if (nextAttempts >= RATE_LIMIT.MAX_ATTEMPTS) {
+        applyRateLimitLock(RATE_LIMIT.LOCKOUT_DURATION);
+        Alert.alert(
+          "Demasiados intentos",
+          `Espera ${RATE_LIMIT.LOCKOUT_DURATION / 1000}s antes de reintentar`
+        );
       } else {
-        Alert.alert("Error de inicio de sesión", e?.message || "Revisa tus credenciales");
+        let errorMessage = "Revisa tus credenciales";
+        if (error?.status === 401) errorMessage = "Email o contraseña incorrectos";
+        else if (error?.status === 400) errorMessage = error?.message || "Datos inválidos";
+        else if (error?.status >= 500) errorMessage = "Error del servidor";
+        else if (error?.message) errorMessage = error.message;
+
+        Alert.alert(
+          "Error de inicio de sesión",
+          `${errorMessage}\n\nIntentos restantes: ${RATE_LIMIT.MAX_ATTEMPTS - nextAttempts}`
+        );
       }
     } finally {
       setSubmitting(false);
     }
-  }
+  }, [canSubmit, email, pwd, attempts, setSessionToken, applyRateLimitLock]);
 
-  async function socialLogin(provider, payload) {
+  const socialLogin = useCallback(async (provider, payload) => {
     try {
-      const res = await fetchWithTimeout(`${API_URL}/auth/social/${provider}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }, 15000);
+      const res = await fetchWithTimeout(
+        `${API_URL}/auth/social/${provider}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        TIMEOUTS.FETCH
+      );
 
       if (res.status === 429) {
-        const ra = res.headers.get("retry-after");
-        const wait = parseRetryAfter(ra) ?? 60_000;
+        const wait = parseRetryAfter(res.headers.get("retry-after")) ?? 60000;
         applyRateLimitLock(wait);
-        throw new Error(`Demasiadas solicitudes. Intenta en ${Math.ceil(wait / 1000)} segundos.`);
+        throw new Error(`Intenta en ${Math.ceil(wait / 1000)}s`);
       }
+
       if (!res.ok) {
         const msg = await parseErrorResponse(res);
-        if (res.status === 501) throw new Error("Inicio de sesión social no disponible en este entorno.");
         throw new Error(msg || `Error ${res.status}`);
       }
 
       const data = await res.json();
       if (data?.token) {
-        await setSessionToken(data.token);
-        await refresh?.();
+        await setSessionToken(data.token, data.user || null);
+        setAttempts(0);
       }
       return data;
-    } catch (err) {
-      console.error(`[LoginScreen] socialLogin ${provider} error:`, err);
-      throw err;
+    } catch (error) {
+      console.error(`[LoginScreen] socialLogin(${provider}):`, error);
+      throw error;
     }
-  }
+  }, [applyRateLimitLock, setSessionToken]);
 
-  async function handleGoogle() {
+  const handleGoogle = useCallback(async () => {
     try {
-      const r = await signInWithGoogle();
-      if (r?.idToken) await socialLogin("google", { idToken: r.idToken });
-      else if (r?.email)
+      const result = await signInWithGoogle();
+      if (result?.idToken) {
+        await socialLogin("google", { idToken: result.idToken });
+      } else if (result?.email) {
         await socialLogin("google", {
-          email: String(r.email).trim().toLowerCase(),
-          fullName: r.name || r.fullName || "Usuario",
-          oauthId: r.sub || r.id,
+          email: String(result.email).trim().toLowerCase(),
+          fullName: result.name || result.fullName || "Usuario",
+          oauthId: result.sub || result.id,
         });
-      else throw new Error("No se obtuvo credencial válida de Google.");
-    } catch (e) {
-      Alert.alert("Google", e.message || "No se pudo iniciar sesión con Google");
+      } else {
+        throw new Error("No se obtuvo credencial de Google");
+      }
+    } catch (error) {
+      Alert.alert("Error con Google", error.message || "Intenta nuevamente");
     }
-  }
+  }, [socialLogin]);
 
-  async function handleFacebook() {
+  const handleFacebook = useCallback(async () => {
     try {
-      const r = await signInWithFacebook();
-      if (r?.accessToken) await socialLogin("facebook", { accessToken: r.accessToken });
-      else if (r?.email)
+      const result = await signInWithFacebook();
+      if (result?.accessToken) {
+        await socialLogin("facebook", { accessToken: result.accessToken });
+      } else if (result?.email) {
         await socialLogin("facebook", {
-          email: String(r.email).trim().toLowerCase(),
-          fullName: r.name || "Usuario",
-          oauthId: r.id,
+          email: String(result.email).trim().toLowerCase(),
+          fullName: result.name || "Usuario",
+          oauthId: result.id,
         });
-      else throw new Error("No se obtuvo credencial válida de Facebook.");
-    } catch (e) {
-      Alert.alert("Facebook", e.message || "No se pudo iniciar sesión con Facebook");
+      } else {
+        throw new Error("No se obtuvo credencial de Facebook");
+      }
+    } catch (error) {
+      Alert.alert("Error con Facebook", error.message || "Intenta nuevamente");
     }
-  }
+  }, [socialLogin]);
 
-  async function handleApple() {
+  const handleApple = useCallback(async () => {
     try {
-      const r = await signInWithApple(); // iOS
-      if (r?.identityToken) await socialLogin("apple", { identityToken: r.identityToken });
-      else if (r?.email)
+      const result = await signInWithApple();
+      if (result?.identityToken) {
+        await socialLogin("apple", { identityToken: result.identityToken });
+      } else if (result?.email) {
         await socialLogin("apple", {
-          email: String(r.email).trim().toLowerCase(),
-          fullName: r.name || r.fullName || "Usuario",
-          oauthId: r.user || r.sub || r.id,
+          email: String(result.email).trim().toLowerCase(),
+          fullName: result.name || result.fullName || "Usuario",
+          oauthId: result.user || result.sub || result.id,
         });
-      else throw new Error("No se obtuvo credencial válida de Apple.");
-    } catch (e) {
-      Alert.alert("Apple", e.message || "No se pudo iniciar sesión con Apple");
+      } else {
+        throw new Error("No se obtuvo credencial de Apple");
+      }
+    } catch (error) {
+      Alert.alert("Error con Apple", error.message || "Intenta nuevamente");
     }
-  }
+  }, [socialLogin]);
 
-  const { width } = useWindowDimensions();
-  const isWeb = Platform.OS === "web";
-  const isNarrow = isWeb && width < 1024;
-
+  /* =========================
+     RENDER
+  ========================= */
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "transparent" }}>
-      {/* Fondo global */}
+    <SafeAreaView style={styles.container}>
       <LinearGradient
-        colors={["#0d0b1f", "#140a2e", "#0b0a1a"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-        pointerEvents="none"
-      />
-      {/* Blobs (no capturan eventos) */}
-      <LinearGradient
-        colors={["rgba(124,58,237,0.35)", "rgba(168,85,247,0.12)"]}
-        style={[styles.blob, { top: -80, left: -60 }]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        pointerEvents="none"
-      />
-      <LinearGradient
-        colors={["rgba(16,185,129,0.18)", "rgba(59,130,246,0.12)"]}
-        style={[styles.blob, { bottom: -90, right: -70, transform: [{ scale: 1.2 }] }]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        pointerEvents="none"
-      />
+        colors={["#0f0f1e", "#1a1a2e", "#16213e"]}
+        style={styles.gradient}
+      >
+        {/* Animated Background Elements */}
+        <View style={styles.backgroundElements}>
+          <View style={[styles.circle, styles.circle1]} />
+          <View style={[styles.circle, styles.circle2]} />
+        </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        {isWeb ? (
-          // WEB: 2 columnas (imagen se mantiene)
-          <View style={styles.webShell}>
-            <View style={[styles.webContainer, isNarrow && styles.webContainerNarrow]}>
-              {/* Izquierda: Imagen */}
-              <View style={[styles.leftPane, isNarrow && styles.leftPaneNarrow]}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.keyboardView}
+        >
+          {isWeb && !isNarrow ? (
+            /* Desktop Layout */
+            <View style={styles.desktopContainer}>
+              <View style={styles.leftSection}>
+                <View style={styles.brandingContainer}>
+                  <Image
+                    source={require("../assets/Logo3.png")}
+                    style={styles.logo}
+                    resizeMode="contain"
+                  />
+                  <Text style={styles.brandName}>CiviHelper</Text>
+                  <Text style={styles.brandTagline}>
+                    Tu asistente ciudadano digital
+                  </Text>
+                </View>
                 <Image
                   source={require("../assets/login-illustration.png")}
-                  style={[styles.illustration, isNarrow && styles.illustrationNarrow]}
-                  resizeMode="cover"
+                  style={styles.illustration}
+                  resizeMode="contain"
                 />
               </View>
 
-              {/* Derecha: Form oscuro */}
-              <View style={[styles.rightPane, isNarrow && styles.rightPaneNarrow]}>
+              <View style={styles.rightSection}>
                 <ScrollView
-                  contentContainerStyle={[styles.rightContent, { maxWidth: 560 }]}
-                  bounces={false}
+                  contentContainerStyle={styles.scrollContent}
                   showsVerticalScrollIndicator={false}
-                  keyboardShouldPersistTaps="always"
+                  bounces={false}
                 >
-                  <View style={styles.brandRow}>
-                    <Image source={require("../assets/Logo3.png")} style={styles.brandIcon} resizeMode="contain" />
-                    <Text style={styles.brandText}>CiviHelper</Text>
-                  </View>
-
                   <LoginForm
                     email={email}
                     setEmail={setEmail}
@@ -423,6 +634,7 @@ export default function LoginScreen({ navigation }) {
                     locked={locked}
                     lockRunning={lockRunning}
                     lockSeconds={lockSeconds}
+                    attempts={attempts}
                     onSubmit={onSubmit}
                     handleGoogle={handleGoogle}
                     handleFacebook={handleFacebook}
@@ -432,162 +644,428 @@ export default function LoginScreen({ navigation }) {
                 </ScrollView>
               </View>
             </View>
-          </View>
-        ) : (
-          // Móvil
-          <ScrollView
-            contentContainerStyle={[styles.container, { minHeight: "100%" }]}
-            bounces={false}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="always"
-          >
-            <View style={[styles.brandRow, { paddingHorizontal: 4 }]}>
-              <Image source={require("../assets/Logo3.png")} style={styles.brandIcon} resizeMode="contain" />
-              <Text style={styles.brandText}>CiviHelper</Text>
-            </View>
+          ) : (
+            /* Mobile Layout */
+            <ScrollView
+              contentContainerStyle={styles.mobileContent}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.mobileBranding}>
+                <Image
+                  source={require("../assets/Logo3.png")}
+                  style={styles.logoMobile}
+                  resizeMode="contain"
+                />
+                <Text style={styles.brandNameMobile}>CiviHelper</Text>
+              </View>
 
-            <LoginForm
-              email={email}
-              setEmail={setEmail}
-              pwd={pwd}
-              setPwd={setPwd}
-              show={show}
-              setShow={setShow}
-              canSubmit={canSubmit}
-              submitting={submitting}
-              locked={locked}
-              lockRunning={lockRunning}
-              lockSeconds={lockSeconds}
-              onSubmit={onSubmit}
-              handleGoogle={handleGoogle}
-              handleFacebook={handleFacebook}
-              handleApple={handleApple}
-              navigation={navigation}
-            />
-          </ScrollView>
-        )}
-      </KeyboardAvoidingView>
+              <LoginForm
+                email={email}
+                setEmail={setEmail}
+                pwd={pwd}
+                setPwd={setPwd}
+                show={show}
+                setShow={setShow}
+                canSubmit={canSubmit}
+                submitting={submitting}
+                locked={locked}
+                lockRunning={lockRunning}
+                lockSeconds={lockSeconds}
+                attempts={attempts}
+                onSubmit={onSubmit}
+                handleGoogle={handleGoogle}
+                handleFacebook={handleFacebook}
+                handleApple={handleApple}
+                navigation={navigation}
+              />
+            </ScrollView>
+          )}
+        </KeyboardAvoidingView>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
-/* ======================= STYLES ======================= */
-
+/* =========================
+   ESTILOS
+========================= */
 const styles = StyleSheet.create({
-  // WEB layout
-  webShell: { width: "100%", minHeight: "100vh" },
-  webContainer: { width: "100%", minHeight: "100vh", flexDirection: "row" },
-  webContainerNarrow: { flexDirection: "column" },
+  // Container principal
+  container: {
+    flex: 1,
+    backgroundColor: "#0f0f1e",
+  },
 
-  leftPane: { flexBasis: "50%", flexGrow: 1, minHeight: "100vh", overflow: "hidden" },
-  leftPaneNarrow: { width: "100%", minHeight: 260 },
-  illustration: { width: "100%", height: "100%" },
-  illustrationNarrow: { height: 260 },
+  gradient: {
+    flex: 1,
+  },
 
-  rightPane: {
-    flexBasis: "50%",
-    flexGrow: 1,
+  keyboardView: {
+    flex: 1,
+  },
+
+  // Elementos de fondo
+  backgroundElements: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: "hidden",
+  },
+
+  circle: {
+    position: "absolute",
+    borderRadius: 9999,
+    opacity: 0.15,
+    ...(Platform.OS === "web" ? { filter: "blur(60px)" } : {}),
+  },
+
+  circle1: {
+    width: 400,
+    height: 400,
+    backgroundColor: "#8b5cf6",
+    top: -200,
+    right: -100,
+  },
+
+  circle2: {
+    width: 300,
+    height: 300,
+    backgroundColor: "#06b6d4",
+    bottom: -150,
+    left: -50,
+  },
+
+  // Layout Desktop
+  desktopContainer: {
+    flex: 1,
+    flexDirection: "row",
     minHeight: "100vh",
-    backgroundColor: "transparent",
   },
-  rightPaneNarrow: { width: "100%", minHeight: "auto" },
-  rightContent: {
+
+  leftSection: {
+    flex: 1,
+    padding: 60,
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  brandingContainer: {
+    alignItems: "center",
+    marginTop: 40,
+  },
+
+  logo: {
+    width: 80,
+    height: 80,
+    marginBottom: 20,
+  },
+
+  brandName: {
+    fontSize: 36,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 8,
+  },
+
+  brandTagline: {
+    fontSize: 16,
+    color: "rgba(255,255,255,0.6)",
+    textAlign: "center",
+  },
+
+  illustration: {
+    width: "100%",
+    maxWidth: 500,
+    height: 400,
+  },
+
+  rightSection: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 40,
+  },
+
+  scrollContent: {
+    width: "100%",
+    maxWidth: 440,
+  },
+
+  // Layout Mobile
+  mobileContent: {
     padding: 24,
-    width: "100%",
-    marginHorizontal: "auto",
-    gap: 16,
-    paddingBottom: 48,
+    paddingTop: 60,
   },
 
-  // Contenedores comunes
-  container: { paddingHorizontal: 20, paddingBottom: 32, gap: 18 },
+  mobileBranding: {
+    alignItems: "center",
+    marginBottom: 48,
+  },
 
-  // Marca
-  brandRow: { flexDirection: "row", alignItems: "center", marginTop: 35, marginBottom: 35, marginLeft: 55 },
-  brandIcon: { width: 100, height: 100, borderRadius: 8, marginRight: 8 },
-  brandText: { color: "#fff", fontSize: 30, fontWeight: "800", letterSpacing: 0.3 },
+  logoMobile: {
+    width: 70,
+    height: 70,
+    marginBottom: 16,
+  },
 
-  // Tarjeta “glass”
-  card: {
-    width: "100%",
-    borderRadius: 24,
-    padding: 18,
+  brandNameMobile: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#fff",
+  },
+
+  // Form Container
+  formContainer: {
     backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: Platform.OS === "web" ? 1 : StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: 24,
+    padding: 32,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
     ...Platform.select({
-      web: { boxShadow: "0 30px 90px rgba(0,0,0,0.45)", backdropFilter: "blur(14px) saturate(120%)" },
-      ios: { shadowColor: "#000", shadowOpacity: 0.28, shadowRadius: 18, shadowOffset: { width: 0, height: 10 } },
-      android: { elevation: 6 },
+      web: {
+        backdropFilter: "blur(20px)",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+      },
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 8,
+      },
     }),
   },
 
-  title: { color: "#fff", fontSize: 28, fontWeight: "800", marginBottom: 4, lineHeight: 34 },
-  subtitle: { color: "rgba(255,255,255,0.8)", fontSize: 14, marginBottom: 14 },
+  // Header
+  header: {
+    marginBottom: 32,
+  },
 
-  field: { marginBottom: 12 },
-  label: { color: "rgba(255,255,255,0.9)", fontSize: 13, marginBottom: 8 },
-
-  inputDark: {
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(10,10,25,0.85)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+  welcomeText: {
+    fontSize: 28,
+    fontWeight: "700",
     color: "#fff",
+    marginBottom: 8,
+  },
+
+  subtitleText: {
+    fontSize: 15,
+    color: "rgba(255,255,255,0.6)",
+  },
+
+  // Input Fields
+  inputWrapper: {
+    marginBottom: 20,
+  },
+
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.9)",
+    marginBottom: 8,
+  },
+
+  inputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.1)",
+    height: 50,
     paddingHorizontal: 16,
   },
-  showBtn: { position: "absolute", right: 12, top: 12, height: 24, justifyContent: "center" },
 
-  // CTA
-  ctaWrapper: { marginTop: 6, borderRadius: 999 },
-  ctaGradient: {
-    height: 50,
-    borderRadius: 999,
+  inputContainerFocused: {
+    borderColor: "#8b5cf6",
+    backgroundColor: "rgba(139,92,246,0.1)",
+  },
+
+  inputIconContainer: {
+    marginRight: 12,
+  },
+
+  input: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 15,
+    ...(Platform.OS === "web" ? { outlineStyle: "none" } : {}),
+  },
+
+  inputWithIcon: {
+    marginLeft: 0,
+  },
+
+  eyeButton: {
+    padding: 8,
+  },
+
+  // Warning
+  warningContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(245,158,11,0.1)",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    gap: 8,
+  },
+
+  warningText: {
+    color: "#f59e0b",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  // Forgot Password
+  forgotPasswordButton: {
+    alignSelf: "flex-end",
+    marginBottom: 24,
+  },
+
+  forgotPasswordText: {
+    color: "#a78bfa",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  // Login Button
+  loginButton: {
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 24,
+  },
+
+  loginButtonDisabled: {
+    opacity: 0.5,
+  },
+
+  loginButtonGradient: {
+    height: 52,
     alignItems: "center",
     justifyContent: "center",
     ...Platform.select({
-      web: { boxShadow: "0 14px 40px rgba(124,58,237,0.45)" },
-      ios: { shadowColor: "#7c3aed", shadowOpacity: 0.55, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
-      android: { elevation: 3 },
+      web: {
+        boxShadow: "0 10px 30px rgba(139,92,246,0.4)",
+      },
+      ios: {
+        shadowColor: "#8b5cf6",
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 6,
+      },
     }),
   },
-  ctaText: { color: "#fff", fontWeight: "800", fontSize: 16 },
 
-  mutedCenter: { textAlign: "center", color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 12 },
+  loginButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 
-  link: { color: "#a78bfa", fontWeight: "700" },
-  altLink: { textAlign: "center", fontWeight: "700" },
+  // Divider
+  dividerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 24,
+  },
 
-  errorText: { color: "#fca5a5", marginTop: 8, fontSize: 12, textAlign: "center" },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
 
-  socialRow: { flexDirection: "row", justifyContent: "center", marginTop: 12, gap: 16 },
-  socialBtn: {
+  dividerText: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 13,
+    marginHorizontal: 16,
+  },
+
+  // Social Buttons
+  socialContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 16,
+    marginBottom: 24,
+  },
+
+  socialButton: {
     width: 56,
     height: 56,
-    borderRadius: 999,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
     ...Platform.select({
-      web: { boxShadow: "0 6px 20px rgba(0,0,0,0.3)" },
-      ios: { shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 3 },
+      web: {
+        transition: "all 0.2s ease",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+      },
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
     }),
   },
 
-  notice: { marginTop: 14, color: "rgba(255,255,255,0.75)", fontSize: 11, textAlign: "center" },
+  socialButtonDisabled: {
+    opacity: 0.4,
+  },
 
-  // blobs (no interceptan eventos)
-  blob: {
-    position: "absolute",
-    width: 260,
-    height: 260,
-    borderRadius: 260,
-    opacity: 1,
-    pointerEvents: "none",
-    ...(Platform.OS === "web" ? { filter: "blur(50px)" } : {}),
+  // Register
+  registerContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+  },
+
+  registerText: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 14,
+  },
+
+  registerLink: {
+    color: "#8b5cf6",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  // Legal Text
+  legalText: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+
+  // Debug Button
+  debugButton: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: "rgba(245,158,11,0.1)",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.3)",
+  },
+
+  debugText: {
+    color: "#f59e0b",
+    fontSize: 13,
+    textAlign: "center",
+    fontWeight: "600",
   },
 });

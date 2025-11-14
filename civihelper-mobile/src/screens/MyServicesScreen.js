@@ -20,6 +20,7 @@ import ServiceCard from "../components/common/ServiceCard";
 import EmptyState from "../components/common/EmptyState";
 import RoleGuard from "../components/RoleGuard";
 
+// Paleta local (puedes reemplazar por tu theme global si prefieres)
 const Colors = {
   primary: "#1E88E5",
   success: "#43A047",
@@ -29,6 +30,18 @@ const Colors = {
   card: "#fff",
   bg: "#F5F7FB",
 };
+
+// ===== Helper de sombras moderno (sin shadow* deprecado) =====
+const iosShadowMap = {
+  xs: "0px 1px 2px rgba(0,0,0,0.12)",
+  sm: "0px 2px 6px rgba(0,0,0,0.14)",
+  md: "0px 4px 12px rgba(0,0,0,0.16)",
+  lg: "0px 8px 24px rgba(0,0,0,0.18)",
+};
+const makeShadow = (level = "sm") =>
+  Platform.OS === "android"
+    ? { elevation: level === "xs" ? 1 : level === "sm" ? 3 : level === "md" ? 5 : 8 }
+    : { boxShadow: iosShadowMap[level] || iosShadowMap.sm };
 
 export default function MyServicesScreen() {
   const navigation = useNavigation();
@@ -298,10 +311,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
+    ...makeShadow("md"),
   },
 });

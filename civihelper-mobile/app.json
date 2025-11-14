@@ -18,10 +18,20 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Necesitamos acceder a tu galería para subir fotos de servicios.",
         "NSPhotoLibraryAddUsageDescription": "Necesitamos guardar imágenes editadas en tu galería.",
-        "NSCameraUsageDescription": "Necesitamos acceder a tu cámara para tomar fotos de tus servicios."
+        "NSCameraUsageDescription": "Necesitamos acceder a tu cámara para tomar fotos de tus servicios.",
+        "NSLocationWhenInUseUsageDescription": "Esta aplicación necesita acceso a tu ubicación para mostrarte servicios cercanos.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Esta aplicación necesita acceso a tu ubicación para mostrarte servicios cercanos."
+      },
+      "config": {
+        "googleMapsApiKey": "AIzaSyCJQMYKSZxcnXhhHoV54W50bz8wfsIec0U"
       }
     },
     "android": {
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCJQMYKSZxcnXhhHoV54W50bz8wfsIec0U"
+        }
+      },
       "package": "com.tuorg.civihelper",
       "adaptiveIcon": {
         "foregroundImage": "src/assets/Logo1.png",
@@ -44,7 +54,9 @@
         }
       ],
       "permissions": [
-        "android.permission.READ_MEDIA_IMAGES"
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {

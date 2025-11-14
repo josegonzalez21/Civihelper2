@@ -1,120 +1,338 @@
-import React, { memo } from "react";
-import { View, Text, TouchableOpacity, Platform, StyleSheet } from "react-native";
+import React, { memo, useMemo } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Platform,
+  StyleSheet,
+  SafeAreaView,
+} from "react-native";
 import { Feather } from "@expo/vector-icons";
 
 /**
- * BottomNav (estilo glass) - Reusable
+ * BottomNav Component - Glassmorphism Style Navigation Bar
+ *
  * Props:
  * - navigation: react-navigation object
- * - items: [{ key, label, icon, route, onPress }]
- * - activeRouteName: string
- * - theme: { cardBg, cardBorder, iconBg, iconActiveBg, iconActiveBorder }
+ * - items: array of { key, label, icon, route, badge?, color? }
+ * - activeRouteName: current active route name
+ * - theme: custom theme object (optional)
+ * - onItemPress: callback when item is pressed (optional)
  */
-function BottomNav({ navigation, items = [], activeRouteName, theme }) {
-  const T = { ...DEFAULT_THEME, ...(theme || {}) };
+function BottomNav({
+  navigation,
+  items = [],
+  activeRouteName,
+  theme,
+  onItemPress,
+}) {
+  const finalTheme = useMemo(() => {
+    return { ...DEFAULT_THEME, ...(theme || {}) };
+  }, [theme]);
+
+  const handleItemPress = (item) => {
+    if (typeof onItemPress === "function") {
+      onItemPress(item);
+    }
+
+    if (typeof item.onPress === "function") {
+      item.onPress();
+      return;
+    }
+
+    if (navigation && item.route) {
+      navigation.navigate(item.route);
+    }
+  };
+
+  const isItemActive = (item) => {
+    return (
+      activeRouteName === item.key ||
+      activeRouteName === item.route ||
+      activeRouteName === item.label
+    );
+  };
 
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
-      <View
-        style={[
-          styles.bar,
-          { backgroundColor: T.cardBg, borderColor: T.cardBorder },
-          Platform.select({ web: { boxShadow: "0 20px 60px rgba(0,0,0,0.45)" } }),
-        ]}
-      >
-        {items.map((it) => {
-          const isActive =
-            activeRouteName === it.key ||
-            activeRouteName === it.route ||
-            activeRouteName === it.label;
+    <SafeAreaView
+      style={[
+        styles.safeArea,
+        { paddingBottom: Platform.OS === "ios" ? 6 : 12 },
+      ]}
+      edges={["bottom"]}
+    >
+      <View style={styles.container}>
+        <View
+          style={[
+            styles.navBar,
+            {
+              backgroundColor: finalTheme.cardBg,
+              borderColor: finalTheme.cardBorder,
+            },
+            Platform.select({
+              ios: {
+                shadowColor: finalTheme.shadowColor,
+                shadowOpacity: 0.3,
+                shadowRadius: 16,
+                shadowOffset: { width: 0, height: -4 },
+              },
+              android: { elevation: 12 },
+            }),
+          ]}
+        >
+          {items.map((item, index) => {
+            const active = isItemActive(item);
+            const itemColor = item.color || finalTheme.iconActiveBg;
 
-          const handlePress = () => {
-            if (typeof it.onPress === "function") return it.onPress();
-            if (navigation && it.route) navigation.navigate(it.route);
-          };
-
-          return (
-            <TouchableOpacity
-              key={it.key}
-              style={styles.item}
-              activeOpacity={0.9}
-              onPress={handlePress}
-              accessibilityRole="button"
-              accessibilityLabel={it.label}
-            >
-              <View
-                style={[
-                  styles.iconBox,
-                  {
-                    backgroundColor: isActive ? T.iconActiveBg : T.iconBg,
-                    borderColor: isActive ? T.iconActiveBorder : T.cardBorder,
-                  },
-                ]}
+            return (
+              <TouchableOpacity
+                key={item.key || index}
+                style={styles.navItem}
+                activeOpacity={0.7}
+                onPress={() => handleItemPress(item)}
+                accessibilityRole="tab"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected: active }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Feather name={it.icon} size={18} color="#fff" />
-              </View>
-              <Text style={[styles.label, { opacity: isActive ? 1 : 0.85 }]} numberOfLines={1}>
-                {it.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+                {/* Icon Container */}
+                <View
+                  style={[
+                    styles.iconContainer,
+                    {
+                      backgroundColor: active
+                        ? itemColor
+                        : finalTheme.iconBg,
+                      borderColor: active
+                        ? itemColor
+                        : finalTheme.cardBorder,
+                    },
+                  ]}
+                >
+                  <Feather
+                    name={item.icon}
+                    size={20}
+                    color="#fff"
+                    style={{ opacity: active ? 1 : 0.8 }}
+                  />
+
+                  {/* Badge */}
+                  {item.badge && item.badge > 0 && (
+                    <View
+                      style={[
+                        styles.badge,
+                        { backgroundColor: item.badgeColor || "#FF4444" },
+                      ]}
+                    >
+                      <Text style={styles.badgeText}>
+                        {item.badge > 99 ? "99+" : item.badge}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Label */}
+                <Text
+                  style={[
+                    styles.label,
+                    {
+                      opacity: active ? 1 : 0.7,
+                      color: active ? "#fff" : "#ccc",
+                      fontWeight: active ? "800" : "600",
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
-      <View style={{ height: Platform.OS === "ios" ? 6 : 0 }} />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const DEFAULT_THEME = {
-  cardBg: "rgba(255,255,255,0.06)",
-  cardBorder: "rgba(255,255,255,0.10)",
-  iconBg: "rgba(255,255,255,0.08)",
-  iconActiveBg: "rgba(124,58,237,0.22)",
-  iconActiveBorder: "rgba(124,58,237,0.45)",
+  cardBg: "rgba(30, 30, 30, 0.88)",
+  cardBorder: "rgba(255, 255, 255, 0.1)",
+  iconBg: "rgba(255, 255, 255, 0.08)",
+  iconActiveBg: "rgba(33, 150, 243, 0.3)",
+  iconActiveBorder: "rgba(33, 150, 243, 0.6)",
+  shadowColor: "#000",
 };
 
 const styles = StyleSheet.create({
-  wrap: {
+  safeArea: {
     position: "absolute",
-    left: 0, right: 0, bottom: 0,
-    paddingHorizontal: 18,
-    paddingBottom: Platform.OS === "ios" ? 10 : 12,
-    zIndex: 10,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 100,
   },
-  bar: {
+  container: {
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === "android" ? 12 : 0,
+  },
+  navBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    borderRadius: 20,
+    justifyContent: "space-around",
+    borderRadius: 24,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.28, shadowRadius: 18, shadowOffset: { width: 0, height: 10 } },
-      android: { elevation: 8 },
-    }),
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    gap: 4,
   },
-  item: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 4 },
-  iconBox: {
-    width: 32, height: 32, borderRadius: 999,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1,
+  navItem: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 4,
   },
-  label: { fontSize: 12, fontWeight: "700", color: "#fff" },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    position: "relative",
+  },
+  label: {
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+    maxWidth: 50,
+  },
+  badge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: DEFAULT_THEME.cardBg,
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: "800",
+  },
 });
 
 export default memo(BottomNav);
 
-/* Helpers */
-export const defaultHomeItems = () => ([
-  { key: "Explore",   label: "Explorar",    icon: "compass",        route: "Search" },
-  { key: "MyReviews", label: "Mis reseñas", icon: "message-square", route: "MyReviews" },
-  { key: "Favorites", label: "Favoritos",   icon: "star",           route: "Favorites" },
-  { key: "Settings",  label: "Ajustes",     icon: "settings",       route: "Settings" },
-]);
+/**
+ * Helper: Generate default navigation items
+ * Use this or create custom items based on your app structure
+ */
+export const createNavItems = (config = {}) => {
+  const defaults = [
+    {
+      key: "Home",
+      label: "Inicio",
+      icon: "home",
+      route: "Home",
+      color: "rgba(59, 130, 246, 0.3)",
+    },
+    {
+      key: "Search",
+      label: "Explorar",
+      icon: "search",
+      route: "Search",
+      color: "rgba(34, 197, 94, 0.3)",
+    },
+    {
+      key: "Bookings",
+      label: "Reservas",
+      icon: "calendar",
+      route: "Bookings",
+      badge: config.bookingsBadge || 0,
+      badgeColor: "#FF6B6B",
+      color: "rgba(99, 102, 241, 0.3)",
+    },
+    {
+      key: "Messages",
+      label: "Mensajes",
+      icon: "message-square",
+      route: "Messages",
+      badge: config.messagesBadge || 0,
+      badgeColor: "#FF8C00",
+      color: "rgba(236, 72, 153, 0.3)",
+    },
+    {
+      key: "Profile",
+      label: "Perfil",
+      icon: "user",
+      route: "Profile",
+      color: "rgba(168, 85, 247, 0.3)",
+    },
+  ];
 
+  return defaults;
+};
+
+/**
+ * Helper: Get active route name from navigation state
+ */
 export const getActiveRouteName = (navigation) => {
   const state = navigation?.getState?.();
-  return state?.routes?.[state?.index ?? 0]?.name || "Home";
+  if (!state) return "Home";
+
+  const route = state.routes?.[state.index ?? 0];
+  return route?.name || "Home";
+};
+
+/**
+ * Helper: Create admin navigation items
+ */
+export const createAdminNavItems = (config = {}) => {
+  return [
+    {
+      key: "AdminHome",
+      label: "Panel",
+      icon: "grid",
+      route: "AdminHome",
+      color: "rgba(59, 130, 246, 0.3)",
+    },
+    {
+      key: "AdminUsers",
+      label: "Usuarios",
+      icon: "users",
+      route: "AdminUsers",
+      badge: config.usersBadge || 0,
+      badgeColor: "#FF6B6B",
+      color: "rgba(34, 197, 94, 0.3)",
+    },
+    {
+      key: "AdminServices",
+      label: "Servicios",
+      icon: "briefcase",
+      route: "AdminServices",
+      color: "rgba(99, 102, 241, 0.3)",
+    },
+    {
+      key: "AdminModeration",
+      label: "Moderación",
+      icon: "shield",
+      route: "AdminModeration",
+      badge: config.moderationBadge || 0,
+      badgeColor: "#FF8C00",
+      color: "rgba(236, 72, 153, 0.3)",
+    },
+    {
+      key: "AdminSettings",
+      label: "Ajustes",
+      icon: "settings",
+      route: "AdminSettings",
+      color: "rgba(168, 85, 247, 0.3)",
+    },
+  ];
 };

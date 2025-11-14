@@ -1,15 +1,20 @@
+// src/routes/featured.js
 import express from "express";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { publicPair, publicUrl } from "../lib/upload.js";
+import { publicUrl } from "../lib/s3.js";
 
 const router = express.Router();
+
+const querySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(12),
+});
 
 // GET /api/featured?page=1&pageSize=12
 router.get("/", async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page ?? "1", 10) || 1);
-    const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize ?? "12", 10) || 12));
-
+    const { page, pageSize } = querySchema.parse(req.query ?? {});
     // Curados por admins
     const where = { adminCreated: true };
 
@@ -28,32 +33,32 @@ router.get("/", async (req, res, next) => {
           city: true,
           ratingAvg: true,
           createdAt: true,
-          coverUrl: true,
-          coverThumbUrl: true,
+          coverUrl: true,       // KEY S3
+          coverThumbUrl: true,  // KEY S3
           category: { select: { id: true, name: true } },
           provider: { select: { id: true, name: true } },
-          serviceType: { select: { id: true, name: true, imageUrl: true } },
+          serviceType: { select: { id: true, name: true, imageUrl: true } }, // imageUrl = KEY S3
         },
       }),
     ]);
 
-    // Absolutizar URLs de portada y de serviceType.imageUrl
-    const items = rows.map((s) => {
-      const cover = publicPair({ path: s.coverUrl || null, thumbPath: s.coverThumbUrl || null });
-      const stImg = s.serviceType?.imageUrl ? publicUrl(s.serviceType.imageUrl) : null;
-
-      return {
-        ...s,
-        coverUrl: cover?.path || s.coverUrl,
-        coverThumbUrl: cover?.thumbPath || s.coverThumbUrl,
-        serviceType: s.serviceType
-          ? { ...s.serviceType, imageUrl: stImg || s.serviceType.imageUrl }
-          : null,
-      };
-    });
+    const items = rows.map((s) => ({
+      ...s,
+      coverUrl: s.coverUrl ? publicUrl(s.coverUrl) : null,
+      coverThumbUrl: s.coverThumbUrl ? publicUrl(s.coverThumbUrl) : null,
+      serviceType: s.serviceType
+        ? {
+            ...s.serviceType,
+            imageUrl: s.serviceType.imageUrl ? publicUrl(s.serviceType.imageUrl) : null,
+          }
+        : null,
+    }));
 
     res.json({ items, total, page, pageSize });
   } catch (e) {
+    if (e?.name === "ZodError") {
+      return res.status(400).json({ message: "Parámetros inválidos", details: e.flatten() });
+    }
     next(e);
   }
 });

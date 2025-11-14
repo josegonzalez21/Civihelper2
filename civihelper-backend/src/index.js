@@ -4,55 +4,74 @@ import fs from "fs";
 import path from "path";
 import express from "express";
 import cors from "cors";
-import helmet from "helmet";
 import compression from "compression";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
+import { createServer } from "http";
 
-// Rate limiters existentes (tuyos)
+// Socket.io
+import { initializeSocket, closeSocket } from "./lib/socket.js";
+
+// Seguridad centralizada
+import { securityMiddleware } from "./middleware/security.js";
+
+// Rate limiters
 import {
   authLimiter as _authLimiter,
   generalLimiter as _generalLimiter,
 } from "./middleware/rateLimit.js";
-
-// Rate limiters nuevos (uploads)
 import {
   uploadSignLimiter,
   uploadGetLimiter,
 } from "./middleware/limits.js";
 
-// Rutas app (públicas/usuario)
+// Rutas (mantén todas las existentes)
 import authRoutes from "./routes/auth.js";
 import passwordRoutes from "./routes/auth.password.js";
 import meRoutes from "./routes/me.js";
 import servicesRoutes from "./routes/services.js";
 import categoriesRoutes from "./routes/categories.js";
 import favoritesRoutes from "./routes/favorites.js";
+import promotionsPublic from "./routes/promotions.js";
 
-// ADMIN + Destacados
+// ADMIN
 import adminServiceTypes from "./routes/admin.serviceTypes.js";
 import adminServices from "./routes/admin.services.js";
 import featuredRoutes from "./routes/featured.js";
+import promotionsAdmin from "./routes/admin.promotions.js";
+import adminReports from "./routes/admin.reports.js";
+import adminMetrics from "./routes/admin.metrics.js";
+import adminUsers from "./routes/admin.users.js";
 
-// Prisma shutdown
-import { shutdownPrisma } from "./lib/prisma.js";
+// Provider
+import providerRoutes from "./routes/provider.js";
 
-// ➕ S3 presigned uploads
+// Uploads
 import uploadsRouter from "./routes/uploads.js";
 
+// Chat routes (nuevo)
+import chatRoutes from "./routes/chat.js";
+
+// Prisma
+import { prisma, shutdownPrisma } from "./lib/prisma.js";
+
 const app = express();
+const httpServer = createServer(app);
 const isProd = process.env.NODE_ENV === "production";
 
 /* ============================================================================
-   Parsers (JSON/URLENCODED)
+   Socket.io Initialization
+============================================================================ */
+initializeSocket(httpServer);
+
+/* ============================================================================
+   Parsers
 ============================================================================ */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Desactiva cabecera que filtra tecnología
 app.disable("x-powered-by");
-
-// Si estás detrás de proxy (Vercel/Render/Nginx), habilita IP real para rate-limit y logs
+app.set("etag", false);
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 1));
 
 /* ============================================================================
@@ -60,59 +79,21 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY || 1));
 ============================================================================ */
 function parseCorsOrigin() {
   const raw = process.env.CORS_ORIGIN;
-  if (!raw || raw === "*") return true; // permite todo (desarrollo)
-  const list = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  if (!raw || raw === "*") return true;
+  const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
   return list.length === 1 ? list[0] : list;
 }
 app.use(
   cors({
     origin: parseCorsOrigin(),
     credentials: true,
-    optionsSuccessStatus: 204,
   })
 );
 
 /* ============================================================================
-   Seguridad y perf (Helmet + Compression)
-   — añadimos fuentes permitidas dinámicas para CDN/S3 en CSP
+   Seguridad (Helmet)
 ============================================================================ */
-function cspWithCdn() {
-  const CDN = (process.env.CDN_BASE_URL || "").replace(/\/+$/, "");
-  const extraImg = [];
-  const extraConnect = [];
-
-  if (CDN) {
-    extraImg.push(CDN);
-    extraConnect.push(CDN);
-  }
-  // Fallbacks comunes si aún sirves directo desde S3/CloudFront
-  extraImg.push("https://*.amazonaws.com", "https://*.cloudfront.net");
-  extraConnect.push("https://*.amazonaws.com", "https://*.cloudfront.net");
-
-  return {
-    useDefaults: true,
-    directives: {
-      "default-src": ["'self'"],
-      "img-src": ["'self'", "data:", "blob:", ...extraImg],
-      "media-src": ["'self'", "data:", "blob:"],
-      "script-src": ["'self'", "'unsafe-inline'"],
-      "style-src": ["'self'", "'unsafe-inline'"],
-      "connect-src": ["'self'", "*", ...extraConnect], // móvil puede llamar a tu API por IP
-    },
-  };
-}
-
-app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-    contentSecurityPolicy: isProd ? cspWithCdn() : false,
-  })
-);
-
-app.use(compression());
+app.use(securityMiddleware());
 
 /* ============================================================================
    Cookies
@@ -122,23 +103,36 @@ app.use(cookieParser());
 /* ============================================================================
    Logs
 ============================================================================ */
-app.use(morgan(isProd ? "combined" : "dev"));
+app.use(
+  morgan(isProd ? "combined" : "dev", {
+    skip: (req) =>
+      req.path === "/healthz" ||
+      req.path === "/livez" ||
+      req.path === "/readyz",
+  })
+);
 
 /* ============================================================================
-   Healthchecks & raíz
+   Healthchecks
 ============================================================================ */
 app.get("/", (_req, res) => res.status(200).send("CiviHelper API"));
-app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/livez", (_req, res) => res.status(200).end());
-app.get("/readyz", (_req, res) => res.status(200).end());
+app.get("/readyz", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false });
+  }
+});
 
 /* ============================================================================
-   Archivos estáticos locales (solo si pides servirlos)
-   - .env: SERVE_LOCAL_UPLOADS=1 y UPLOAD_DIR=./uploads
+   Archivos estáticos
 ============================================================================ */
-const SERVE_LOCAL_UPLOADS = String(process.env.SERVE_LOCAL_UPLOADS || "0") === "1";
-if (SERVE_LOCAL_UPLOADS) {
-  const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+if (String(process.env.SERVE_UPLOADS || "1") === "1") {
+  const UPLOAD_DIR =
+    process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
   try {
     if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   } catch (e) {
@@ -158,8 +152,24 @@ if (SERVE_LOCAL_UPLOADS) {
 }
 
 /* ============================================================================
-   Rate limit (desactivable en dev)
-   - .env: DEV_RATE_LIMIT_OFF=1 para desactivar
+   Compresión
+============================================================================ */
+app.use(compression());
+
+/* ============================================================================
+   No-cache en la API
+============================================================================ */
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("ETag");
+    res.removeHeader("Last-Modified");
+  }
+  next();
+});
+
+/* ============================================================================
+   Rate limit
 ============================================================================ */
 const useRateLimit = String(process.env.DEV_RATE_LIMIT_OFF || "0") !== "1";
 const pass = (_req, _res, next) => next();
@@ -169,74 +179,65 @@ const _uploadSignLimiter = useRateLimit ? uploadSignLimiter : pass;
 const _uploadGetLimiter = useRateLimit ? uploadGetLimiter : pass;
 
 /* ============================================================================
-   Montaje de rutas
+   Rutas
 ============================================================================ */
-// 1) Auth con su limiter específico
+// Auth
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/auth/password", authLimiter, passwordRoutes);
 
-// 2) Limiter general para el resto de /api
+// General limiter
 app.use("/api", generalLimiter);
 
-// 3) Rutas reales
+// Rutas principales
 app.use("/api/me", meRoutes);
+app.use("/api/provider", providerRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/categories", categoriesRoutes);
 app.use("/api/favorites", favoritesRoutes);
 
+// Chat (nuevo)
+app.use("/api/chat", chatRoutes);
+
 // ADMIN
-app.use("/api/admin/service-types", adminServiceTypes);
+app.use("/api/admin/promotions", promotionsAdmin);
+app.use("/api/admin/reports", adminReports);
 app.use("/api/admin/services", adminServices);
+app.use("/api/admin/service-types", adminServiceTypes);
+app.use("/api/admin/users", adminUsers);
+app.use("/api/admin/metrics", adminMetrics);
 
-// Públicos: destacados del Home (adminCreated=true)
+// Públicos
 app.use("/api/featured", featuredRoutes);
+app.use("/api/promotions", promotionsPublic);
 
-// ➕ Firma para subidas S3 (aplica límites por endpoint)
+// Uploads
 app.use("/api/uploads/sign", _uploadSignLimiter);
 app.use("/api/uploads/sign-get", _uploadGetLimiter);
 app.use("/api/uploads", uploadsRouter);
 
 /* ============================================================================
-   404
-============================================================================ */
-app.use((_req, res) => res.status(404).json({ message: "Not Found" }));
-
-/* ============================================================================
    Manejo de errores
 ============================================================================ */
 app.use((err, _req, res, _next) => {
-  if (!isProd) console.error(err);
-
-  const isMulter =
-    err?.name === "MulterError" ||
-    /multipart|multer|File too large|Unexpected field/i.test(err?.message || "");
-
-  if (isMulter) {
-    return res
-      .status(400)
-      .json({ message: err?.message || "Error al procesar el archivo subido" });
+  if (err?.name === "ZodError") {
+    return res.status(422).json({ message: "Datos inválidos", details: err.flatten() });
   }
-
-  const status = err.status || 500;
-  const message = err.message || "Internal Server Error";
-  res.status(status).json({ message });
+  const status = err?.status || 500;
+  const code = err?.code || "INTERNAL_ERROR";
+  if (status >= 500) console.error(err);
+  res.set("Cache-Control", "no-store");
+  return res.status(status).json({ message: err?.message || "Error interno", code });
 });
 
 /* ============================================================================
-   Server
+   Server (Cambio importante: usar httpServer en lugar de app.listen)
 ============================================================================ */
-const PORT = Number(process.env.PORT || 4000);
+const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
-const LOCAL_URL = `http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`;
-// Prioriza BACKEND_URL para móviles; si no, PUBLIC_APP_URL; si no, local
-const PUBLIC_URL = process.env.BACKEND_URL || process.env.PUBLIC_APP_URL || LOCAL_URL;
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`[server] Listening on http://${HOST}:${PORT}`);
-  console.log(`[server] Local:  ${LOCAL_URL}`);
-  console.log(`[server] Public: ${PUBLIC_URL}`);
-  if (!useRateLimit) console.log("[server] DEV_RATE_LIMIT_OFF=1 → rate limit desactivado");
-  if (process.env.CDN_BASE_URL) console.log(`[CSP] CDN_BASE_URL: ${process.env.CDN_BASE_URL}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
+  console.log(`Socket.io ready on ws://${HOST}:${PORT}`);
 });
 
 /* ============================================================================
@@ -245,12 +246,10 @@ const server = app.listen(PORT, HOST, () => {
 const shutdown = async (signal) => {
   try {
     console.log(`\n[server] ${signal} recibido. Cerrando...`);
-    server.close(async () => {
-      await shutdownPrisma();
-      console.log("[server] Cerrado limpio. Bye! 👋");
-      process.exit(0);
-    });
-    // Failsafe: forzar salida si algo cuelga
+    
+    // Cerrar Socket.io
+    await closeSocket();
+    
     setTimeout(async () => {
       await shutdownPrisma();
       process.exit(0);

@@ -36,6 +36,10 @@ export function createTransport() {
  * @param {string} opts.resetUrl - enlace de reseteo
  */
 export async function sendPasswordResetEmail({ to, resetUrl }) {
+  if (!to || !resetUrl) {
+    throw new Error("Faltan parámetros para enviar correo de reseteo");
+  }
+
   const transporter = createTransport();
 
   const subject = "Restablecer contraseña - CiviHelper";
@@ -49,18 +53,18 @@ Si no solicitaste esto, ignora este mensaje.
 `;
 
   const html = `
-    <div style="font-family:system-ui,Arial,sans-serif;max-width:560px;margin:auto;padding:20px">
-      <h2>¿Necesitas restablecer tu contraseña?</h2>
-      <p>Haz clic en el siguiente botón o usa el enlace dentro de los próximos <b>15 minutos</b>.</p>
-      <p style="margin:24px 0">
-        <a href="${resetUrl}" style="background:#1E88E5;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block">
-          Restablecer contraseña
-        </a>
-      </p>
-      <p style="font-size:12px;color:#64748b">Si no solicitaste esto, ignora este mensaje.</p>
-      <p style="font-size:12px;color:#94a3b8;word-break:break-all">${resetUrl}</p>
-    </div>
-  `;
+<div style="font-family:system-ui,Arial,sans-serif;max-width:560px;margin:auto;padding:20px">
+  <h2>¿Necesitas restablecer tu contraseña?</h2>
+  <p>Haz clic en el siguiente botón o usa el enlace dentro de los próximos <b>15 minutos</b>.</p>
+  <p style="margin:24px 0">
+    <a href="${resetUrl}" style="background:#1E88E5;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block">
+      Restablecer contraseña
+    </a>
+  </p>
+  <p style="font-size:12px;color:#64748b">Si no solicitaste esto, ignora este mensaje.</p>
+  <p style="font-size:12px;color:#94a3b8;word-break:break-all">${resetUrl}</p>
+</div>
+`;
 
   const from = process.env.SMTP_FROM || `"CiviHelper" <${process.env.SMTP_USER}>`;
 

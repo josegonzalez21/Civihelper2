@@ -1,40 +1,60 @@
 // src/middleware/roles.js
 
 /**
- * Normaliza a MAYÚSCULAS y valida el rol.
+ * Conjunto de roles válidos (en MAYÚSCULAS).
+ * Ajusta si agregas más roles en el futuro.
  */
-function normalizeRole(r) {
-  return String(r || "").toUpperCase();
-}
-
-/**
- * Verifica si el rol del usuario está incluido en la lista requerida.
- * @param {string} userRole
- * @param {string|string[]} required
- * @returns {boolean}
- */
-function hasAnyRole(userRole, required) {
-  const u = normalizeRole(userRole);
-  const list = Array.isArray(required) ? required : [required];
-  return list.map(normalizeRole).includes(u);
-}
-
-/**
- * Mapa de jerarquía de roles (mayor número = más privilegios)
- */
-const ROLE_RANK = {
+export const ROLE_RANK = {
   CLIENT: 1,
   PROVIDER: 2,
   ADMIN: 3,
 };
 
 /**
- * Verifica si userRole >= minRole según jerarquía.
+ * Normaliza a MAYÚSCULAS y valida el rol.
+ * Devuelve la cadena en MAYÚSCULAS o "" si es falsy.
+ * @param {unknown} r
+ * @returns {string}
  */
-function hasMinRole(userRole, minRole) {
+export function normalizeRole(r) {
+  return String(r || "").toUpperCase();
+}
+
+/**
+ * Verifica si el rol del usuario está incluido en la lista requerida (OR).
+ * @param {string} userRole
+ * @param {string|string[]} required
+ * @returns {boolean}
+ */
+export function hasAnyRole(userRole, required) {
+  const u = normalizeRole(userRole);
+  const list = (Array.isArray(required) ? required : [required]).map(normalizeRole);
+  return list.includes(u);
+}
+
+/**
+ * Verifica si userRole >= minRole según jerarquía.
+ * Jerarquía definida por ROLE_RANK (mayor número = más privilegios).
+ * @param {string} userRole
+ * @param {string} minRole
+ * @returns {boolean}
+ */
+export function hasMinRole(userRole, minRole) {
   const u = ROLE_RANK[normalizeRole(userRole)] ?? 0;
-  const m = ROLE_RANK[normalizeRole(minRole)] ?? Infinity; // Infinity fuerza false si minRole inválido
+  const m = ROLE_RANK[normalizeRole(minRole)];
+  if (m == null) return false; // minRole inválido → false
   return u >= m;
+}
+
+/**
+ * Crea un Error 403 consistente.
+ * @param {string} message
+ */
+function forbidden(message) {
+  const err = new Error(message || "Prohibido");
+  err.status = 403;
+  err.code = "FORBIDDEN";
+  return err;
 }
 
 /**
@@ -42,21 +62,24 @@ function hasMinRole(userRole, minRole) {
  * Uso:
  *   app.post("/ruta", requireAuth, requireRole("ADMIN"), ...);
  *   app.post("/ruta", requireAuth, requireRole(["ADMIN","PROVIDER"]), ...);
+ *
+ * @param {string|string[]} required
+ * @returns {(req,res,next)=>void}
  */
 export function requireRole(required = "ADMIN") {
+  const requiredList = Array.isArray(required) ? required : [required];
+  const label = requiredList.map(normalizeRole).join(" o ");
+
   return (req, _res, next) => {
     try {
       const current = req?.user?.role;
-      if (!current || !hasAnyRole(current, required)) {
-        const err = new Error(
-          `Prohibido: requiere rol ${Array.isArray(required) ? required.join(" o ") : required}`
-        );
-        err.status = 403;
-        return next(err);
+      if (!current || !hasAnyRole(current, requiredList)) {
+        return next(forbidden(`Prohibido: requiere rol ${label}`));
       }
       return next();
     } catch (e) {
       e.status = e.status || 403;
+      e.code = e.code || "FORBIDDEN";
       return next(e);
     }
   };
@@ -67,19 +90,23 @@ export function requireRole(required = "ADMIN") {
  * Jerarquía: ADMIN (3) > PROVIDER (2) > CLIENT (1)
  * Uso:
  *   app.post("/ruta", requireAuth, requireMinRole("PROVIDER"), ...);
+ *
+ * @param {keyof typeof ROLE_RANK} minRole
+ * @returns {(req,res,next)=>void}
  */
 export function requireMinRole(minRole = "ADMIN") {
+  const label = normalizeRole(minRole);
+
   return (req, _res, next) => {
     try {
       const current = req?.user?.role;
       if (!current || !hasMinRole(current, minRole)) {
-        const err = new Error(`Prohibido: requiere al menos rol ${minRole}`);
-        err.status = 403;
-        return next(err);
+        return next(forbidden(`Prohibido: requiere al menos rol ${label}`));
       }
       return next();
     } catch (e) {
       e.status = e.status || 403;
+      e.code = e.code || "FORBIDDEN";
       return next(e);
     }
   };

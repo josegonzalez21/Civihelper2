@@ -1,161 +1,165 @@
 // prisma/seed.js
-import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcrypt";
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("▶ Iniciando seed…");
+  console.log('🌱 Iniciando seed completo de Civihelper...');
 
-  // 0) Usuario base (admin-like para pruebas)
-  const email = "admin@civihelper.test";
-  const password = await bcrypt.hash("CiviHelper#2025", 10);
+  // 1) password
+  const passwordHash = await bcrypt.hash('copo1515', 10);
 
-  const user = await prisma.user.upsert({
-    where: { email },
-    update: {},
-    create: {
-      name: "Admin Demo",
-      email,
-      password,
-      role: "ADMIN",
-    },
-  });
-  console.log("✔ Usuario:", user.email);
-
-  // 1) Categoría raíz
-  const category = await prisma.category.upsert({
-    where: { // unique([name, parentId]) → usa compound key virtual con findFirst + create
-      // upsert por compuesta no es directo; hacemos fallback manual
-      id: "ignore" // placeholder, no se usa
-    },
-    update: {},
-    create: {
-      name: "Servicios del Hogar",
-      imageUrl: "/uploads/demo/cat-home.jpg",
-      imageThumbUrl: "/uploads/demo/cat-home-thumb.jpg",
-      isActive: true,
-      sector: "OTHER",
-    },
-  }).catch(async () => {
-    const found = await prisma.category.findFirst({
-      where: { name: "Servicios del Hogar", parentId: null },
-    });
-    return found ?? prisma.category.create({
-      data: {
-        name: "Servicios del Hogar",
-        imageUrl: "/uploads/demo/cat-home.jpg",
-        imageThumbUrl: "/uploads/demo/cat-home-thumb.jpg",
-        isActive: true,
-        sector: "OTHER",
+  // 2) usuarios base
+  const [admin, providerUser, client] = await Promise.all([
+    prisma.user.upsert({
+      where: { email: 'joseadmin@gmail.com' },
+      update: {},
+      create: {
+        name: 'Jose Admin',
+        email: 'joseadmin@gmail.com',
+        role: 'ADMIN',
+        passwordHash,
       },
-    });
-  });
-  console.log("✔ Categoría:", category.name);
+    }),
+    prisma.user.upsert({
+      where: { email: 'joseprovider@gmail.com' },
+      update: {},
+      create: {
+        name: 'Jose Provider',
+        email: 'joseprovider@gmail.com',
+        role: 'PROVIDER',
+        passwordHash,
+      },
+    }),
+    prisma.user.upsert({
+      where: { email: 'joseuser@gmail.com' },
+      update: {},
+      create: {
+        name: 'Jose User',
+        email: 'joseuser@gmail.com',
+        role: 'CLIENT',
+        passwordHash,
+      },
+    }),
+  ]);
 
-  // 2) ServiceType
-  const stName = "Plomería";
-  const serviceType = await prisma.serviceType.upsert({
-    where: { name: stName },
-    update: {},
-    create: {
-      name: stName,
-      description: "Servicios de plomería y gasfitería",
-      imageUrl: "/uploads/demo/st-plumbing.png",
-      isActive: true,
-      categoryId: category.id,
-    },
-  });
-  console.log("✔ ServiceType:", serviceType.name);
+  console.log('✅ Usuarios listos');
 
-  // 3) Servicio publicado con portada
-  const serviceTitle = "Instalación de grifería";
-  // Evita única compuesta (title, providerId)
-  const service = await prisma.service.upsert({
+  // 3) provider ligado al user provider
+  await prisma.provider.upsert({
     where: {
-      // No hay unique directo en (title, providerId) para upsert, hacemos fallback:
-      id: "ignore",
+      // porque tu modelo tiene @@unique([type, oauthId])
+      type_oauthId: {
+        type: 'GOOGLE',
+        oauthId: providerUser.id,
+      },
     },
     update: {},
     create: {
-      title: serviceTitle,
-      description: "Instalación profesional de grifería y sellos. Garantía 90 días.",
-      priceFrom: 25000,
-      city: "Santiago",
-      providerId: user.id, // usando el usuario admin como proveedor demo
-      categoryId: category.id,
-      serviceTypeId: serviceType.id,
-      adminCreated: true,
-      status: "PUBLISHED",
-      coverUrl: "/uploads/demo/service-cover.jpg",
-      coverThumbUrl: "/uploads/demo/service-cover-thumb.jpg",
+      userId: providerUser.id,
+      type: 'GOOGLE',
+      oauthId: providerUser.id,
     },
-  }).catch(async () => {
-    const found = await prisma.service.findFirst({
-      where: { title: serviceTitle, providerId: user.id },
-    });
-    return found ?? prisma.service.create({
-      data: {
-        title: serviceTitle,
-        description: "Instalación profesional de grifería y sellos. Garantía 90 días.",
-        priceFrom: 25000,
-        city: "Santiago",
-        providerId: user.id,
-        categoryId: category.id,
-        serviceTypeId: serviceType.id,
-        adminCreated: true,
-        status: "PUBLISHED",
-        coverUrl: "/uploads/demo/service-cover.jpg",
-        coverThumbUrl: "/uploads/demo/service-cover-thumb.jpg",
-      },
-    });
   });
-  console.log("✔ Service:", service.title);
 
-  // 4) Imagen adicional del servicio (opcional)
-  await prisma.serviceImage.createMany({
+  console.log('✅ Provider creado');
+
+  // 4) categorías base
+  await prisma.category.createMany({
     data: [
-      { serviceId: service.id, url: "/uploads/demo/service1.jpg", thumbUrl: "/uploads/demo/service1-thumb.jpg" },
-      { serviceId: service.id, url: "/uploads/demo/service2.jpg", thumbUrl: "/uploads/demo/service2-thumb.jpg" },
+      { name: 'Hogar', sector: 'PRIVATE' },
+      { name: 'Educación', sector: 'EDUCATION' },
+      { name: 'Salud', sector: 'HEALTH' },
     ],
     skipDuplicates: true,
   });
 
-  // 5) Reseña única por usuario/servicio
-  const existingReview = await prisma.review.findUnique({
-    where: { userId_serviceId: { userId: user.id, serviceId: service.id } },
-  }).catch(() => null);
-  if (!existingReview) {
-    await prisma.review.create({
-      data: {
-        userId: user.id,
-        serviceId: service.id,
-        rating: 5,
-        comment: "Excelente servicio, muy recomendable.",
-      },
-    });
-  }
-  console.log("✔ Review creada/asegurada");
+  // buscamos la categoría "Hogar" para usar su id
+  const hogar = await prisma.category.findFirst({
+    where: { name: 'Hogar' },
+  });
 
-  // 6) Favorite (único por usuario/servicio)
-  const fav = await prisma.favorite.upsert({
+  console.log('✅ Categorías listas');
+
+  // 5) tipo de servicio
+  const serviceType = await prisma.serviceType.upsert({
+    where: { name: 'Reparación' },
+    update: {},
+    create: {
+      name: 'Reparación',
+      description: 'Servicios generales de mantenimiento y reparación.',
+    },
+  });
+
+  console.log('✅ ServiceType listo');
+
+  // 6) servicio de ejemplo
+  const service = await prisma.service.upsert({
     where: {
-      userId_serviceId: { userId: user.id, serviceId: service.id },
+      // 👇 este nombre viene de tu schema: name: "service_title_provider_unique"
+      service_title_provider_unique: {
+        title: 'Servicio de Limpieza',
+        providerId: providerUser.id,
+      },
     },
     update: {},
     create: {
-      userId: user.id,
+      title: 'Servicio de Limpieza',
+      description: 'Limpieza general de casas y departamentos.',
+      priceFrom: 25000,
+      city: 'Santiago',
+      providerId: providerUser.id,
+      categoryId: hogar?.id ?? null,
+      serviceTypeId: serviceType.id,
+      status: 'PUBLISHED',
+      coverUrl: 'https://via.placeholder.com/400x250.png?text=Limpieza',
+    },
+  });
+
+  console.log('✅ Servicio creado');
+
+  // 7) imagen del servicio
+  await prisma.serviceImage.create({
+    data: {
+      serviceId: service.id,
+      url: 'https://via.placeholder.com/400x250.png?text=Imagen+1',
+      thumbUrl: 'https://via.placeholder.com/150x100.png?text=Thumb',
+    },
+  });
+
+  console.log('✅ Imagen del servicio creada');
+
+  // 8) promoción
+  await prisma.promotion.create({
+    data: {
+      title: 'Descuento en Limpieza',
+      imageKey: 'https://via.placeholder.com/800x400.png?text=Promo+Limpieza',
+      serviceId: service.id,
+      categoryId: hogar?.id ?? null,
+      isActive: true,
+      startsAt: new Date(),
+    },
+  });
+
+  console.log('✅ Promoción creada');
+
+  // 9) review del cliente
+  await prisma.review.create({
+    data: {
+      rating: 5,
+      comment: 'Excelente servicio.',
+      userId: client.id,
       serviceId: service.id,
     },
   });
-  console.log("✔ Favorite:", fav.id);
 
-  console.log("✅ Seed finalizado.");
+  console.log('🎉 Seed completado.');
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Seed error:", e);
+    console.error('❌ Error en seed:', e);
     process.exit(1);
   })
   .finally(async () => {

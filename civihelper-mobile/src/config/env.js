@@ -1,10 +1,27 @@
 // src/config/env.js
-export const ENV = {
-  API_URL: process.env.EXPO_PUBLIC_API_URL || "",
-  CDN_BASE_URL: (process.env.EXPO_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, ""),
+
+// Configuración directa sin dependencias de Constants
+const API_URL = 'http://192.168.1.4:4000';
+
+const ENV = {
+  dev: {
+    apiUrl: API_URL,
+    wsUrl: API_URL,
+  },
+  staging: {
+    apiUrl: 'https://staging-api.civihelper.com',
+    wsUrl: 'https://staging-api.civihelper.com',
+  },
+  prod: {
+    apiUrl: 'https://api.civihelper.com',
+    wsUrl: 'https://api.civihelper.com',
+  },
 };
 
-if (!ENV.API_URL) {
-  // Mejor fallar fuerte en dev que depurar llamadas a 'undefined'
-  console.warn("[ENV] Falta EXPO_PUBLIC_API_URL en tu entorno de Expo.");
-}
+// Usar siempre dev en desarrollo
+const config = __DEV__ ? ENV.dev : ENV.prod;
+
+// Log para debugging
+console.log('[ENV] Configuración cargada:', config);
+
+export default config;

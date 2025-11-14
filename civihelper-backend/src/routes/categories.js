@@ -1,5 +1,6 @@
 // src/routes/categories.js
 import express from "express";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
@@ -12,61 +13,83 @@ import {
 const ensureAdmin = requireRole("ADMIN");
 const router = express.Router();
 
-// Enum válido (match prisma)
-const SECTORS = new Set(["PUBLIC", "PRIVATE", "NGO", "EDUCATION", "HEALTH", "OTHER"]);
+/* =========================
+   Helpers / Schemas
+========================= */
+const SectorEnum = z.enum(["PUBLIC", "PRIVATE", "NGO", "EDUCATION", "HEALTH", "OTHER"]);
+const booleanish = (def) =>
+  z
+    .preprocess((v) => {
+      if (typeof v === "boolean") return v;
+      if (typeof v === "number") return v !== 0;
+      if (typeof v === "string") return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+      return undefined;
+    }, z.boolean().optional())
+    .default(def);
 
-function parseBool(val, fallback) {
-  if (typeof val === "boolean") return val;
-  if (typeof val === "string") {
-    if (val.toLowerCase() === "true") return true;
-    if (val.toLowerCase() === "false") return false;
-  }
-  return fallback;
-}
-
-/* -------------------------------
-   Helper: absolutiza URLs imagen
--------------------------------- */
-function toAbsolute(entity) {
+const toAbsolute = (entity) => {
   if (!entity) return entity;
   return {
     ...entity,
-    // En BD guardamos KEYS (imageUrl/imageThumbUrl). Aquí exponemos URLs públicas:
     imageUrl: entity.imageUrl ? publicUrl(entity.imageUrl) : null,
     imageThumbUrl: entity.imageThumbUrl ? publicUrl(entity.imageThumbUrl) : null,
   };
-}
+};
 
-/**
- * GET /api/categories
- * Lista plana (útil para buscador).
- * Soporta ?search=&page=&pageSize=&sector=PUBLIC|...&onlyRoots=true|false&parentId=<id>
- */
+const listQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+  sector: SectorEnum.optional(),
+  onlyRoots: booleanish(false),
+  parentId: z.string().trim().optional(),
+});
+
+const createBodySchema = z.object({
+  name: z.string().trim().min(1, "name es requerido").max(120),
+  parentId: z.string().trim().optional().nullable(),
+  isActive: booleanish(true),
+  sector: SectorEnum.default("OTHER"),
+});
+
+const updateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  parentId: z.string().trim().optional().nullable(),
+  isActive: booleanish(undefined).optional(),
+  sector: SectorEnum.optional(),
+});
+
+const iconBodySchema = z.object({
+  key: z.string().trim().min(3, "Falta 'key' de S3 para el icono"),
+});
+
+const coverBodySchema = z.object({
+  key: z.string().trim().min(3, "Falta 'key' de S3 para la portada"),
+  thumbKey: z.string().trim().min(3).optional(),
+});
+
+/* =========================
+   GET /api/categories
+   Lista plana (buscador)
+========================= */
 router.get("/", async (req, res, next) => {
   try {
-    const {
-      search = "",
-      page,
-      pageSize,
-      sector,
-      onlyRoots,
-      parentId,
-    } = req.query;
+    const q = listQuerySchema.parse(req.query ?? {});
 
     const where = {
       AND: [
         { isActive: true },
-        search ? { name: { contains: String(search), mode: "insensitive" } } : {},
-        sector && SECTORS.has(String(sector)) ? { sector: String(sector) } : {},
-        parseBool(onlyRoots, false) ? { parentId: null } : {},
-        parentId ? { parentId: String(parentId) } : {},
+        q.search ? { name: { contains: q.search, mode: "insensitive" } } : {},
+        q.sector ? { sector: q.sector } : {},
+        q.onlyRoots ? { parentId: null } : {},
+        q.parentId ? { parentId: q.parentId } : {},
       ],
     };
 
-    // Paginado
-    if (page && pageSize) {
-      const take = Math.min(Number(pageSize) || 20, 100);
-      const skip = Math.max(((Number(page) || 1) - 1) * take, 0);
+    // Paginado opcional
+    if (q.page && q.pageSize) {
+      const take = q.pageSize;
+      const skip = (q.page - 1) * take;
 
       const [items, total] = await Promise.all([
         prisma.category.findMany({
@@ -88,10 +111,11 @@ router.get("/", async (req, res, next) => {
         }),
         prisma.category.count({ where }),
       ]);
+
       return res.json({
         items: items.map(toAbsolute),
         total,
-        page: Number(page),
+        page: q.page,
         pageSize: take,
       });
     }
@@ -113,11 +137,16 @@ router.get("/", async (req, res, next) => {
     });
     return res.json(items.map(toAbsolute));
   } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Parámetros inválidos", details: e.flatten() });
     next(e);
   }
 });
 
-/** GET /api/categories/tree : Áreas raíz con sus derivados */
+/* =========================
+   GET /api/categories/tree
+   Áreas raíz con hijos activos
+========================= */
 router.get("/tree", async (_req, res, next) => {
   try {
     const roots = await prisma.category.findMany({
@@ -160,7 +189,9 @@ router.get("/tree", async (_req, res, next) => {
   }
 });
 
-/** GET /api/categories/roots : solo áreas (root) */
+/* =========================
+   GET /api/categories/roots
+========================= */
 router.get("/roots", async (_req, res, next) => {
   try {
     const roots = await prisma.category.findMany({
@@ -184,7 +215,9 @@ router.get("/roots", async (_req, res, next) => {
   }
 });
 
-/** GET /api/categories/:id/children : derivados de un área */
+/* =========================
+   GET /api/categories/:id/children
+========================= */
 router.get("/:id/children", async (req, res, next) => {
   try {
     const id = String(req.params.id);
@@ -209,33 +242,25 @@ router.get("/:id/children", async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/categories
- * Crea Área (sin parentId) o Derivado (con parentId) [ADMIN]
- * SOLO datos. Las imágenes se suben con endpoints dedicados.
- * Body JSON: { name, parentId?, isActive?, sector? }
- */
+/* =========================
+   POST /api/categories  [ADMIN]
+   Crea área o derivado
+========================= */
 router.post("/", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
-    const { name, parentId = null } = req.body || {};
-    const isActive = parseBool(req.body?.isActive, true);
-    const sector = SECTORS.has(String(req.body?.sector)) ? String(req.body?.sector) : "OTHER";
+    const body = createBodySchema.parse(req.body ?? {});
 
-    if (!name || typeof name !== "string") {
-      return res.status(400).json({ message: "name es requerido" });
-    }
-
-    if (parentId) {
-      const parent = await prisma.category.findUnique({ where: { id: String(parentId) } });
+    if (body.parentId) {
+      const parent = await prisma.category.findUnique({ where: { id: String(body.parentId) } });
       if (!parent) return res.status(400).json({ message: "parentId inválido" });
     }
 
     const created = await prisma.category.create({
       data: {
-        name: name.trim(),
-        parentId: parentId ? String(parentId) : null,
-        isActive: Boolean(isActive),
-        sector,
+        name: body.name.trim(),
+        parentId: body.parentId ? String(body.parentId) : null,
+        isActive: Boolean(body.isActive),
+        sector: body.sector,
       },
       select: {
         id: true,
@@ -252,42 +277,38 @@ router.post("/", requireAuth, ensureAdmin, async (req, res, next) => {
 
     res.status(201).json(toAbsolute(created));
   } catch (e) {
-    if (e?.code === "P2002") {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    if (e?.code === "P2002")
       return res.status(409).json({ message: "Ya existe una categoría con ese nombre en este nivel" });
-    }
     next(e);
   }
 });
 
-/**
- * PUT /api/categories/:id
- * Edita nombre/sector/parent/isActive [ADMIN]
- * (las imágenes se actualizan con endpoints dedicados)
- * Body JSON: { name?, parentId?, isActive?, sector? }
- */
+/* =========================
+   PUT /api/categories/:id  [ADMIN]
+   Edita nombre/sector/parent/isActive
+========================= */
 router.put("/:id", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
     const id = String(req.params.id);
     const prev = await prisma.category.findUnique({ where: { id } });
     if (!prev) return res.status(404).json({ message: "Categoría no encontrada" });
 
-    const { name, parentId } = req.body || {};
-
-    if (parentId === id) {
+    const body = updateBodySchema.parse(req.body ?? {});
+    if (body.parentId === id) {
       return res.status(400).json({ message: "Una categoría no puede ser su propio padre" });
     }
-    if (parentId) {
-      const parent = await prisma.category.findUnique({ where: { id: String(parentId) } });
+    if (body.parentId) {
+      const parent = await prisma.category.findUnique({ where: { id: String(body.parentId) } });
       if (!parent) return res.status(400).json({ message: "parentId inválido" });
     }
 
     const updates = {
-      ...(typeof name === "string" ? { name: name.trim() } : {}),
-      ...(parentId === undefined ? {} : { parentId: parentId ? String(parentId) : null }),
-      ...(parseBool(req.body?.isActive, undefined) !== undefined
-        ? { isActive: parseBool(req.body?.isActive, undefined) }
-        : {}),
-      ...(SECTORS.has(String(req.body?.sector)) ? { sector: String(req.body?.sector) } : {}),
+      ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+      ...(body.parentId !== undefined ? { parentId: body.parentId ? String(body.parentId) : null } : {}),
+      ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+      ...(body.sector !== undefined ? { sector: body.sector } : {}),
     };
 
     const updated = await prisma.category.update({
@@ -308,27 +329,24 @@ router.put("/:id", requireAuth, ensureAdmin, async (req, res, next) => {
 
     res.json(toAbsolute(updated));
   } catch (e) {
-    if (e?.code === "P2002") {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    if (e?.code === "P2002")
       return res.status(409).json({ message: "Ya existe una categoría con ese nombre en este nivel" });
-    }
-    if (e?.code === "P2025") {
+    if (e?.code === "P2025")
       return res.status(404).json({ message: "Categoría no encontrada" });
-    }
     next(e);
   }
 });
 
-/* =========================================================
-   PUT /api/categories/:id/icon
-   Body: { key: string }
-   Valida que la key sea imagen y pertenezca a esta categoría.
-   Guarda en imageUrl (icono “pequeño”).
-========================================================= */
+/* =========================
+   PUT /api/categories/:id/icon  [ADMIN]
+   Guarda icono (imageUrl)
+========================= */
 router.put("/:id/icon", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
     const id = String(req.params.id);
-    const { key } = req.body || {};
-    if (!key) return res.status(400).json({ message: "Falta 'key' de S3 para el icono" });
+    const { key } = iconBodySchema.parse(req.body ?? {});
 
     const isUnder = new RegExp(`^uploads\\/categories\\/${id}\\/icon\\/`).test(String(key));
     if (!isUnder) return res.status(400).json({ message: "La key no corresponde a esta categoría" });
@@ -339,7 +357,6 @@ router.put("/:id/icon", requireAuth, ensureAdmin, async (req, res, next) => {
     });
     if (!cat) return res.status(404).json({ message: "Categoría no existe" });
 
-    // Valida en S3: existencia/MIME/tamaño por kind (2 MB para category_icon en lib/s3.js)
     await assertImageObject(String(key), { expectedKind: "category_icon" });
 
     const updated = await prisma.category.update({
@@ -348,29 +365,26 @@ router.put("/:id/icon", requireAuth, ensureAdmin, async (req, res, next) => {
       select: { id: true, name: true, imageUrl: true, imageThumbUrl: true },
     });
 
-    // Borrar anterior si cambió (best-effort)
-    const prev = cat.imageUrl;
-    if (prev && prev !== updated.imageUrl) {
-      Promise.allSettled([deleteFromUploads(prev)]).catch(() => {});
+    if (cat.imageUrl && cat.imageUrl !== updated.imageUrl) {
+      Promise.allSettled([deleteFromUploads(cat.imageUrl)]).catch(() => {});
     }
 
     res.json(toAbsolute(updated));
   } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
     next(e);
   }
 });
 
-/* =========================================================
-   PUT /api/categories/:id/cover
-   Body: { key: string, thumbKey?: string }
-   Valida imagen y pertenencia.
-   Guarda en imageUrl (y opcionalmente imageThumbUrl).
-========================================================= */
+/* =========================
+   PUT /api/categories/:id/cover  [ADMIN]
+   Guarda portada (imageUrl + imageThumbUrl?)
+========================= */
 router.put("/:id/cover", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
     const id = String(req.params.id);
-    const { key, thumbKey } = req.body || {};
-    if (!key) return res.status(400).json({ message: "Falta 'key' de S3 para la portada" });
+    const { key, thumbKey } = coverBodySchema.parse(req.body ?? {});
 
     const isUnder = new RegExp(`^uploads\\/categories\\/${id}\\/cover\\/`).test(String(key));
     if (!isUnder) return res.status(400).json({ message: "La key no corresponde a esta categoría" });
@@ -381,10 +395,8 @@ router.put("/:id/cover", requireAuth, ensureAdmin, async (req, res, next) => {
     });
     if (!cat) return res.status(404).json({ message: "Categoría no existe" });
 
-    // Valida: existencia/MIME/tamaño por kind (8 MB para category_cover en lib/s3.js)
     await assertImageObject(String(key), { expectedKind: "category_cover" });
     if (thumbKey) {
-      // Si usas miniaturas bajo el mismo prefijo de cover, también serán category_cover
       await assertImageObject(String(thumbKey), { expectedKind: "category_cover" });
     }
 
@@ -397,20 +409,25 @@ router.put("/:id/cover", requireAuth, ensureAdmin, async (req, res, next) => {
       select: { id: true, name: true, imageUrl: true, imageThumbUrl: true },
     });
 
-    const prevs = [];
-    if (cat.imageUrl && cat.imageUrl !== updated.imageUrl) prevs.push(deleteFromUploads(cat.imageUrl));
+    const deletions = [];
+    if (cat.imageUrl && cat.imageUrl !== updated.imageUrl) deletions.push(deleteFromUploads(cat.imageUrl));
     if (thumbKey && cat.imageThumbUrl && cat.imageThumbUrl !== updated.imageThumbUrl) {
-      prevs.push(deleteFromUploads(cat.imageThumbUrl));
+      deletions.push(deleteFromUploads(cat.imageThumbUrl));
     }
-    if (prevs.length) Promise.allSettled(prevs).catch(() => {});
+    if (deletions.length) Promise.allSettled(deletions).catch(() => {});
 
     res.json(toAbsolute(updated));
   } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
     next(e);
   }
 });
 
-/** DELETE /api/categories/:id : soft-delete (isActive=false) [ADMIN] */
+/* =========================
+   DELETE /api/categories/:id  [ADMIN]
+   Soft-delete (isActive=false)
+========================= */
 router.delete("/:id", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
     const id = String(req.params.id);

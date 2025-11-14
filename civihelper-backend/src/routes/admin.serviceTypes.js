@@ -1,5 +1,6 @@
 // src/routes/admin.serviceTypes.js
 import express from "express";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
@@ -10,96 +11,113 @@ import {
 } from "../lib/s3.js";
 
 const router = express.Router();
+const ensureAdmin = requireRole("ADMIN");
 
-/** Helper: absolutiza imageUrl (imageUrl guarda la KEY en BD) */
-function toAbsolute(st) {
-  if (!st) return st;
-  return { ...st, imageUrl: st.imageUrl ? publicUrl(st.imageUrl) : null };
-}
+/* ===========================================
+   Helpers / Schemas
+=========================================== */
+const booleanish = (def) =>
+  z
+    .preprocess((v) => {
+      if (typeof v === "boolean") return v;
+      if (typeof v === "number") return v !== 0;
+      if (typeof v === "string")
+        return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+      return undefined;
+    }, z.boolean().optional())
+    .default(def);
 
-/**
- * POST /api/service-types
- * Crear tipo (solo datos). La imagen se sube con endpoint dedicado.
- * Body JSON: { name, description?, isActive?, categoryId? }
- */
-router.post(
-  "/",
-  requireAuth,
-  requireRole("ADMIN"),
-  async (req, res, next) => {
-    try {
-      const { name, description, isActive = true, categoryId } = req.body || {};
+const toAbsolute = (st) =>
+  st ? { ...st, imageUrl: st.imageUrl ? publicUrl(st.imageUrl) : null } : st;
 
-      if (!name || typeof name !== "string" || !name.trim()) {
-        return res.status(400).json({ message: "El nombre es requerido" });
-      }
+const createBodySchema = z.object({
+  name: z.string().trim().min(1, "El nombre es requerido").max(120),
+  description: z
+    .string()
+    .trim()
+    .max(1000, "La descripción no puede superar 1000 caracteres")
+    .optional()
+    .nullable(),
+  isActive: booleanish(true),
+  categoryId: z.string().trim().min(1).optional().nullable(),
+});
 
-      // valida categoryId si viene
-      if (categoryId) {
-        const exists = await prisma.category.findUnique({
-          where: { id: String(categoryId) },
-          select: { id: true },
-        });
-        if (!exists) return res.status(400).json({ message: "Categoría inválida" });
-      }
+const listQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  isActive: booleanish(undefined).optional(),
+  categoryId: z.string().trim().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
 
-      const created = await prisma.serviceType.create({
-        data: {
-          name: String(name).trim(),
-          description: description ? String(description).trim() : null,
-          isActive: Boolean(isActive !== false && String(isActive) !== "false"),
-          categoryId: categoryId ? String(categoryId) : null,
-        },
-        select: {
-          id: true, name: true, description: true, isActive: true,
-          categoryId: true, imageUrl: true, createdAt: true,
-        },
-      });
+const updateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(1000).optional().nullable(),
+  isActive: booleanish(undefined).optional(),
+  categoryId: z.string().trim().optional().nullable(),
+});
 
-      res.status(201).json(toAbsolute(created));
-    } catch (e) {
-      if (e?.code === "P2002") {
-        return res.status(400).json({ message: "El nombre ya existe" });
-      }
-      if (e?.code === "P2025") {
-        return res.status(400).json({ message: "Categoría inválida" });
-      }
-      next(e);
-    }
-  }
-);
+const imageBodySchema = z.object({
+  key: z.string().trim().min(3, "Falta 'key' de S3 para la imagen"),
+});
 
-/**
- * GET /api/service-types
- * Lista con filtros y paginado (ADMIN)
- * Query:
- *  - search: string
- *  - isActive: true|false
- *  - categoryId: string
- *  - page, pageSize
- */
-router.get("/", requireAuth, requireRole("ADMIN"), async (req, res, next) => {
+/* ===========================================
+   POST /api/service-types  [ADMIN]
+   Crear tipo (solo datos)
+=========================================== */
+router.post("/", requireAuth, ensureAdmin, async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page ?? "1", 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize ?? "20", 10) || 20));
-    const search = String(req.query.search || "").trim();
+    const data = createBodySchema.parse(req.body ?? {});
+    if (data.categoryId) {
+      const exists = await prisma.category.findUnique({
+        where: { id: String(data.categoryId) },
+        select: { id: true },
+      });
+      if (!exists) return res.status(400).json({ message: "Categoría inválida" });
+    }
 
-    const isActive =
-      typeof req.query.isActive === "string"
-        ? req.query.isActive.toLowerCase() === "true"
-          ? true
-          : req.query.isActive.toLowerCase() === "false"
-          ? false
-          : undefined
-        : undefined;
+    const created = await prisma.serviceType.create({
+      data: {
+        name: data.name,
+        description: data.description ? String(data.description) : null,
+        isActive: Boolean(data.isActive),
+        categoryId: data.categoryId ? String(data.categoryId) : null,
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isActive: true,
+        categoryId: true,
+        imageUrl: true,
+        createdAt: true,
+      },
+    });
 
-    const categoryId = req.query.categoryId ? String(req.query.categoryId) : undefined;
+    res.status(201).json(toAbsolute(created));
+  } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    if (e?.code === "P2002")
+      return res.status(400).json({ message: "El nombre ya existe" });
+    if (e?.code === "P2025")
+      return res.status(400).json({ message: "Categoría inválida" });
+    next(e);
+  }
+});
 
+/* ===========================================
+   GET /api/service-types  [ADMIN]
+   Lista + filtros + paginado
+=========================================== */
+router.get("/", requireAuth, ensureAdmin, async (req, res, next) => {
+  try {
+    const q = listQuerySchema.parse(req.query ?? {});
     const where = {
       AND: [
-        search ? { name: { contains: search, mode: "insensitive" } } : {},
-        isActive === undefined ? {} : { isActive },
-        categoryId ? { categoryId } : {},
+        q.search ? { name: { contains: q.search, mode: "insensitive" } } : {},
+        q.isActive === undefined ? {} : { isActive: q.isActive },
+        q.categoryId ? { categoryId: q.categoryId } : {},
       ],
     };
 
@@ -108,11 +126,16 @@ router.get("/", requireAuth, requireRole("ADMIN"), async (req, res, next) => {
       prisma.serviceType.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: (q.page - 1) * q.pageSize,
+        take: q.pageSize,
         select: {
-          id: true, name: true, description: true, isActive: true,
-          categoryId: true, imageUrl: true, createdAt: true,
+          id: true,
+          name: true,
+          description: true,
+          isActive: true,
+          categoryId: true,
+          imageUrl: true,
+          createdAt: true,
         },
       }),
     ]);
@@ -120,146 +143,143 @@ router.get("/", requireAuth, requireRole("ADMIN"), async (req, res, next) => {
     res.json({
       items: rows.map(toAbsolute),
       total,
-      page,
-      pageSize,
+      page: q.page,
+      pageSize: q.pageSize,
     });
   } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Parámetros inválidos", details: e.flatten() });
     next(e);
   }
 });
 
-/**
- * PUT /api/service-types/:id
- * Actualiza campos de datos. La imagen se actualiza en endpoint dedicado.
- * Body JSON: { name?, description?, isActive?, categoryId? }
- */
-router.put(
-  "/:id",
-  requireAuth,
-  requireRole("ADMIN"),
-  async (req, res, next) => {
-    try {
-      const id = String(req.params.id);
-      const prev = await prisma.serviceType.findUnique({
-        where: { id },
+/* ===========================================
+   PUT /api/service-types/:id  [ADMIN]
+   Actualiza campos de datos
+=========================================== */
+router.put("/:id", requireAuth, ensureAdmin, async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const prev = await prisma.serviceType.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!prev) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
+
+    const body = updateBodySchema.parse(req.body ?? {});
+    if (body.categoryId != null && body.categoryId !== "") {
+      const exists = await prisma.category.findUnique({
+        where: { id: String(body.categoryId) },
         select: { id: true },
       });
-      if (!prev) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
-
-      const { name, description, isActive, categoryId } = req.body || {};
-
-      if (categoryId != null && categoryId !== "") {
-        const exists = await prisma.category.findUnique({
-          where: { id: String(categoryId) },
-          select: { id: true },
-        });
-        if (!exists) return res.status(400).json({ message: "Categoría inválida" });
-      }
-
-      const upd = await prisma.serviceType.update({
-        where: { id },
-        data: {
-          ...(name != null ? { name: String(name).trim() } : {}),
-          ...(description != null ? { description: String(description).trim() } : {}),
-          ...(isActive != null ? { isActive: String(isActive) !== "false" } : {}),
-          ...(categoryId !== undefined ? { categoryId: categoryId ? String(categoryId) : null } : {}),
-        },
-        select: {
-          id: true, name: true, description: true, isActive: true,
-          categoryId: true, imageUrl: true, createdAt: true,
-        },
-      });
-
-      res.json(toAbsolute(upd));
-    } catch (e) {
-      if (e?.code === "P2002") {
-        return res.status(400).json({ message: "El nombre ya existe" });
-      }
-      if (e?.code === "P2025") {
-        return res.status(404).json({ message: "Tipo de servicio no encontrado" });
-      }
-      next(e);
+      if (!exists) return res.status(400).json({ message: "Categoría inválida" });
     }
+
+    const upd = await prisma.serviceType.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.description !== undefined ? { description: body.description } : {}),
+        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        ...(body.categoryId !== undefined
+          ? { categoryId: body.categoryId ? String(body.categoryId) : null }
+          : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isActive: true,
+        categoryId: true,
+        imageUrl: true,
+        createdAt: true,
+      },
+    });
+
+    res.json(toAbsolute(upd));
+  } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    if (e?.code === "P2002")
+      return res.status(400).json({ message: "El nombre ya existe" });
+    if (e?.code === "P2025")
+      return res.status(404).json({ message: "Tipo de servicio no encontrado" });
+    next(e);
   }
-);
+});
 
-/* =========================================================
-   PUT /api/service-types/:id/image
-   Body: { key: string }
-   Sube imagen por S3 key (validación de imagen, tamaño y prefijo)
-========================================================= */
-router.put(
-  "/:id/image",
-  requireAuth,
-  requireRole("ADMIN"),
-  async (req, res, next) => {
-    try {
-      const id = String(req.params.id);
-      const { key } = req.body || {};
-      if (!key) return res.status(400).json({ message: "Falta 'key' de S3 para la imagen" });
+/* ===========================================
+   PUT /api/service-types/:id/image  [ADMIN]
+   Guarda imagen por S3 key (validación de prefijo/kind)
+=========================================== */
+router.put("/:id/image", requireAuth, ensureAdmin, async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const { key } = imageBodySchema.parse(req.body ?? {});
 
-      const st = await prisma.serviceType.findUnique({
-        where: { id },
-        select: { id: true, imageUrl: true, name: true },
-      });
-      if (!st) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
+    const st = await prisma.serviceType.findUnique({
+      where: { id },
+      select: { id: true, imageUrl: true, name: true },
+    });
+    if (!st) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
 
-      // Prefijo esperado: uploads/service-types/:id/...
-      const isUnder = new RegExp(`^uploads\\/service-types\\/${id}\\/`).test(String(key));
-      if (!isUnder) {
-        return res.status(400).json({ message: "La key no corresponde a este tipo de servicio" });
-      }
-
-      // Valida existencia + MIME + límites (4 MB definidos en lib/s3.js)
-      await assertImageObject(String(key), { expectedKind: "service_type_image" });
-
-      const updated = await prisma.serviceType.update({
-        where: { id },
-        data: { imageUrl: String(key) },
-        select: {
-          id: true, name: true, description: true, isActive: true,
-          categoryId: true, imageUrl: true, createdAt: true,
-        },
-      });
-
-      // Borrar imagen anterior si cambió (best-effort)
-      const prevKey = st.imageUrl;
-      if (prevKey && prevKey !== updated.imageUrl) {
-        Promise.allSettled([deleteFromUploads(prevKey)]).catch(() => {});
-      }
-
-      res.json(toAbsolute(updated));
-    } catch (e) {
-      next(e);
+    // Prefijo esperado: uploads/service-types/:id/...
+    const isUnder = new RegExp(`^uploads\\/service-types\\/${id}\\/`).test(String(key));
+    if (!isUnder) {
+      return res.status(400).json({ message: "La key no corresponde a este tipo de servicio" });
     }
-  }
-);
 
-/**
- * DELETE /api/service-types/:id
- * Borra el registro y su imagen de S3 si existe.
- */
-router.delete(
-  "/:id",
-  requireAuth,
-  requireRole("ADMIN"),
-  async (req, res, next) => {
-    try {
-      const id = String(req.params.id);
-      const prev = await prisma.serviceType.findUnique({
-        where: { id },
-        select: { imageUrl: true },
-      });
-      if (!prev) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
+    // Valida existencia + MIME + límites (4 MB para service_type_image en lib/s3.js)
+    await assertImageObject(String(key), { expectedKind: "service_type_image" });
 
-      if (prev.imageUrl) await deleteFromUploads(prev.imageUrl);
-      await prisma.serviceType.delete({ where: { id } });
+    const updated = await prisma.serviceType.update({
+      where: { id },
+      data: { imageUrl: String(key) },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isActive: true,
+        categoryId: true,
+        imageUrl: true,
+        createdAt: true,
+      },
+    });
 
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
+    // Borrar imagen anterior si cambió (best-effort)
+    const prevKey = st.imageUrl;
+    if (prevKey && prevKey !== updated.imageUrl) {
+      Promise.allSettled([deleteFromUploads(prevKey)]).catch(() => {});
     }
+
+    res.json(toAbsolute(updated));
+  } catch (e) {
+    if (e?.name === "ZodError")
+      return res.status(400).json({ message: "Datos inválidos", details: e.flatten() });
+    next(e);
   }
-);
+});
+
+/* ===========================================
+   DELETE /api/service-types/:id  [ADMIN]
+   Borra el registro + imagen S3 si existe
+=========================================== */
+router.delete("/:id", requireAuth, ensureAdmin, async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const prev = await prisma.serviceType.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+    if (!prev) return res.status(404).json({ message: "Tipo de servicio no encontrado" });
+
+    if (prev.imageUrl) await deleteFromUploads(prev.imageUrl);
+    await prisma.serviceType.delete({ where: { id } });
+
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
 
 export default router;
